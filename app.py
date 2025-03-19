@@ -69,7 +69,8 @@ def process_questions(task_id, questions, system_prompt, api_key):
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": question}
                     ],
-                    stream=True
+                    stream=True,
+                    temperature=0.6
                 )
                 
                 # 实时收集流式响应

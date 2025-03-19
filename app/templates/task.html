@@ -168,30 +168,35 @@
             
             results.forEach((result, index) => {
                 const existingCard = container.children[index];
+                const isStreaming = result.is_streaming === true; // 明确检查是否为true
+                const hasError = result.error === true; // 明确检查是否为true
+                
                 const cardHtml = `
-                    <div class="card result-card ${result.is_streaming ? 'streaming' : ''} ${result.error ? 'error' : ''}">
+                    <div class="card result-card ${isStreaming ? 'streaming' : ''} ${hasError ? 'error' : ''}">
                         <div class="card-body">
                             <div class="question">
                                 问题 ${index + 1}: ${result.question}
-                                <span class="streaming-indicator">正在生成...</span>
+                                ${isStreaming ? '<span class="streaming-indicator">正在生成...</span>' : ''}
                             </div>
-                            <div class="answer">${result.answer}</div>
+                            <div class="answer">${result.answer || ''}</div>
                         </div>
                     </div>
                 `;
                 
                 if (existingCard) {
-                    // 如果卡片已存在，只在内容不同时更新
-                    if (existingCard.innerHTML !== cardHtml) {
-                        existingCard.innerHTML = cardHtml;
+                    const shouldUpdate = existingCard.querySelector('.answer').textContent !== result.answer ||
+                                       existingCard.classList.contains('streaming') !== isStreaming ||
+                                       existingCard.classList.contains('error') !== hasError;
+                    
+                    if (shouldUpdate) {
+                        existingCard.outerHTML = cardHtml;
                     }
                 } else {
-                    // 如果是新卡片，添加到容器
                     container.insertAdjacentHTML('beforeend', cardHtml);
                 }
                 
-                // 如果是正在流式输出的结果，滚动到该卡片
-                if (result.is_streaming) {
+                // 只在真正流式输出时滚动
+                if (isStreaming) {
                     const card = container.children[index];
                     card.scrollIntoView({ behavior: 'smooth', block: 'end' });
                 }
