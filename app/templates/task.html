@@ -36,9 +36,31 @@
         .result-card.error {
             border-left-color: #dc3545;
         }
+        .result-card.interrupted {
+            border-left-color: #ffc107;
+        }
         .question {
             font-weight: 500;
             color: #495057;
+            max-height: 100px;
+            overflow-y: auto;
+            padding-right: 10px;
+            margin-bottom: 10px;
+            position: relative;
+        }
+        .question::-webkit-scrollbar {
+            width: 6px;
+        }
+        .question::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+        .question::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 3px;
+        }
+        .question::-webkit-scrollbar-thumb:hover {
+            background: #555;
         }
         .answer {
             padding: 1rem;
@@ -66,8 +88,31 @@
             display: inline;
             animation: blink 1s infinite;
         }
+        .interrupted-indicator {
+            color: #ffc107;
+            font-size: 0.875rem;
+            margin-left: 0.5rem;
+            font-weight: bold;
+        }
         @keyframes blink {
             50% { opacity: 0; }
+        }
+        .question-expand-btn {
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(to right, transparent, #fff 30%);
+            padding: 2px 5px;
+            font-size: 12px;
+            color: #007bff;
+            cursor: pointer;
+            display: none;
+        }
+        .question.truncated .question-expand-btn {
+            display: block;
+        }
+        .question.expanded {
+            max-height: none;
         }
     </style>
 </head>
@@ -83,6 +128,7 @@
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <h5 id="status-text">正在加载...</h5>
                     <div>
+                        <button id="control-btn" class="btn btn-warning me-2">终止任务</button>
                         <a id="back-btn" href="/" class="btn btn-outline-secondary">返回首页</a>
                         <a id="download-btn" href="/download/{{ task_id }}" class="btn btn-success">下载结果</a>
                     </div>
@@ -105,9 +151,68 @@
         const taskId = '{{ task_id }}';
         let resultsData = [];
         let lastUpdateTime = 0;
+        let isTaskPaused = false;
+        let lastTaskStatus = '';
+        
+        // 控制按钮点击处理
+        const controlBtn = document.getElementById('control-btn');
+        controlBtn.addEventListener('click', function() {
+            // 禁用按钮，防止重复点击
+            controlBtn.disabled = true;
+            
+            const action = isTaskPaused ? 'resume' : 'pause';
+            
+            // 发送任务控制请求
+            fetch(`/api/task/${taskId}/control`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ action: action })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('操作失败');
+                }
+                return response.json();
+            })
+            .then(data => {
+                isTaskPaused = action === 'pause';
+                updateControlButton();
+                // 请求成功后重新启用按钮
+                controlBtn.disabled = false;
+                // 如果恢复任务，立即刷新状态
+                if (action === 'resume') {
+                    updateStatus();
+                }
+            })
+            .catch(error => {
+                console.error('控制任务状态出错:', error);
+                alert(`任务${action === 'pause' ? '暂停' : '继续'}失败，请重试`);
+                controlBtn.disabled = false;
+            });
+        });
+        
+        // 更新控制按钮状态
+        function updateControlButton() {
+            if (isTaskPaused) {
+                controlBtn.textContent = '继续任务';
+                controlBtn.classList.remove('btn-warning');
+                controlBtn.classList.add('btn-success');
+                // 显示下载按钮，让用户可以下载当前结果
+                document.getElementById('download-btn').style.display = 'inline-block';
+            } else {
+                controlBtn.textContent = '终止任务';
+                controlBtn.classList.remove('btn-success');
+                controlBtn.classList.add('btn-warning');
+            }
+        }
         
         // 更新状态函数
         function updateStatus() {
+            // 如果暂停中，仍然需要定期检查状态，但降低频率
+            const pollInterval = isTaskPaused ? 3000 : 1000;
+            
             fetch(`/api/task/${taskId}`)
                 .then(response => {
                     if (!response.ok) {
@@ -122,16 +227,28 @@
                     document.getElementById('progress-bar').setAttribute('aria-valuenow', progressPercent);
                     document.getElementById('progress-text').textContent = `处理进度: ${data.completed}/${data.total}`;
                     
-                    // 更新状态文本
-                    let statusText = '正在处理...';
-                    if (data.status === 'completed') {
-                        statusText = '✅ 处理完成';
-                        document.getElementById('download-btn').style.display = 'inline-block';
-                        document.getElementById('progress-bar').classList.remove('progress-bar-animated');
-                    } else if (data.status === 'failed') {
-                        statusText = '❌ 处理失败';
+                    // 检查任务状态变化
+                    if (lastTaskStatus !== data.status) {
+                        lastTaskStatus = data.status;
+                        
+                        // 更新状态文本
+                        let statusText = '正在处理...';
+                        if (data.status === 'completed') {
+                            statusText = '✅ 处理完成';
+                            document.getElementById('download-btn').style.display = 'inline-block';
+                            document.getElementById('progress-bar').classList.remove('progress-bar-animated');
+                            controlBtn.style.display = 'none';  // 隐藏控制按钮
+                        } else if (data.status === 'failed') {
+                            statusText = '❌ 处理失败';
+                        }
+                        document.getElementById('status-text').textContent = statusText;
                     }
-                    document.getElementById('status-text').textContent = statusText;
+                    
+                    // 如果后端状态和前端状态不一致，同步状态
+                    if (data.paused !== isTaskPaused) {
+                        isTaskPaused = data.paused;
+                        updateControlButton();
+                    }
                     
                     // 更新结果
                     if (data.results) {
@@ -142,18 +259,20 @@
                     const currentTime = Date.now() / 1000;
                     const timeSinceLastUpdate = currentTime - (data.last_update || 0);
                     
-                    let pollInterval;
+                    let nextPollInterval;
                     if (data.status === 'completed') {
-                        pollInterval = 5000; // 完成后每5秒轮询一次
+                        nextPollInterval = 5000; // 完成后每5秒轮询一次
+                    } else if (isTaskPaused) {
+                        nextPollInterval = 3000; // 暂停时每3秒轮询一次
                     } else if (timeSinceLastUpdate < 5) {
-                        pollInterval = 500; // 最近有更新，快速轮询
+                        nextPollInterval = 500; // 最近有更新，快速轮询
                     } else if (timeSinceLastUpdate < 30) {
-                        pollInterval = 1000; // 30秒内有更新，正常轮询
+                        nextPollInterval = 1000; // 30秒内有更新，正常轮询
                     } else {
-                        pollInterval = 2000; // 长时间无更新，降低轮询频率
+                        nextPollInterval = 2000; // 长时间无更新，降低轮询频率
                     }
                     
-                    setTimeout(updateStatus, pollInterval);
+                    setTimeout(updateStatus, nextPollInterval);
                 })
                 .catch(error => {
                     console.error('获取任务状态出错:', error);
@@ -168,15 +287,22 @@
             
             results.forEach((result, index) => {
                 const existingCard = container.children[index];
-                const isStreaming = result.is_streaming === true; // 明确检查是否为true
-                const hasError = result.error === true; // 明确检查是否为true
+                const isStreaming = result.is_streaming === true;
+                const hasError = result.error === true;
+                const isInterrupted = result.interrupted === true;
+                
+                // 添加中断状态的样式
+                let cardClass = `card result-card ${isStreaming ? 'streaming' : ''} 
+                                ${hasError ? 'error' : ''} ${isInterrupted ? 'interrupted' : ''}`;
                 
                 const cardHtml = `
-                    <div class="card result-card ${isStreaming ? 'streaming' : ''} ${hasError ? 'error' : ''}">
+                    <div class="${cardClass.trim()}">
                         <div class="card-body">
-                            <div class="question">
+                            <div class="question" onclick="toggleQuestion(this)">
                                 问题 ${index + 1}: ${result.question}
                                 ${isStreaming ? '<span class="streaming-indicator">正在生成...</span>' : ''}
+                                ${isInterrupted ? '<span class="interrupted-indicator">[已暂停]</span>' : ''}
+                                <span class="question-expand-btn">展开</span>
                             </div>
                             <div class="answer">${result.answer || ''}</div>
                         </div>
@@ -186,7 +312,8 @@
                 if (existingCard) {
                     const shouldUpdate = existingCard.querySelector('.answer').textContent !== result.answer ||
                                        existingCard.classList.contains('streaming') !== isStreaming ||
-                                       existingCard.classList.contains('error') !== hasError;
+                                       existingCard.classList.contains('error') !== hasError ||
+                                       existingCard.classList.contains('interrupted') !== isInterrupted;
                     
                     if (shouldUpdate) {
                         existingCard.outerHTML = cardHtml;
@@ -200,7 +327,24 @@
                     const card = container.children[index];
                     card.scrollIntoView({ behavior: 'smooth', block: 'end' });
                 }
+                
+                // 检查问题是否需要展开按钮
+                const questionDiv = container.children[index].querySelector('.question');
+                if (questionDiv && questionDiv.scrollHeight > questionDiv.clientHeight) {
+                    questionDiv.classList.add('truncated');
+                }
             });
+        }
+        
+        // 切换问题显示状态
+        function toggleQuestion(element) {
+            if (element.classList.contains('expanded')) {
+                element.classList.remove('expanded');
+                element.querySelector('.question-expand-btn').textContent = '展开';
+            } else {
+                element.classList.add('expanded');
+                element.querySelector('.question-expand-btn').textContent = '收起';
+            }
         }
         
         // 页面加载完成后开始轮询状态

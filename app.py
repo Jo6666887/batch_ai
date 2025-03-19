@@ -37,6 +37,8 @@ def process_questions(task_id, questions, system_prompt, api_key):
     current_tasks[task_id]['status'] = 'processing'
     current_tasks[task_id]['total'] = len(questions)
     current_tasks[task_id]['completed'] = 0
+    current_tasks[task_id]['paused'] = False  # 添加暂停状态标记
+    current_tasks[task_id]['last_update'] = time.time()  # 初始化更新时间
     
     # 使用实际的API密钥
     actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
@@ -47,13 +49,28 @@ def process_questions(task_id, questions, system_prompt, api_key):
         api_key=actual_api_key
     )
     
-    for i, question in enumerate(questions):
+    i = 0
+    while i < len(questions):
+        # 检查是否暂停
+        if current_tasks[task_id].get('paused', False):
+            logger.info(f"任务 {task_id} 已暂停，等待继续...")
+            # 暂停时每秒检查一次状态
+            time.sleep(1)
+            # 如果任务被删除，则退出
+            if task_id not in current_tasks:
+                logger.info(f"任务 {task_id} 已被删除，终止处理")
+                return results
+            # 继续循环，不处理问题
+            continue
+            
+        question = questions[i]
         try:
             logger.info(f"处理问题 {i+1}/{len(questions)}")
             
             # 如果问题为空，跳过
             if pd.isna(question) or str(question).strip() == '':
                 logger.warning(f"跳过空问题: 索引 {i}")
+                i += 1  # 移至下一个问题
                 continue
                 
             # 确保问题是字符串类型
@@ -70,11 +87,35 @@ def process_questions(task_id, questions, system_prompt, api_key):
                         {"role": "user", "content": question}
                     ],
                     stream=True,
-                    temperature=0.6
+                    temperature=0.7
                 )
                 
                 # 实时收集流式响应
                 for chunk in stream:
+                    # 检查是否在收集响应过程中被暂停
+                    if current_tasks[task_id].get('paused', False):
+                        logger.info(f"任务 {task_id} 在流式响应过程中被暂停")
+                        # 记录部分结果
+                        if answer:
+                            result = {
+                                "question": question,
+                                "answer": answer + "\n\n[由于任务暂停，回答未完成]",
+                                "is_streaming": False,
+                                "interrupted": True
+                            }
+                            
+                            if len(results) > i:
+                                results[i] = result
+                            else:
+                                results.append(result)
+                            
+                            current_tasks[task_id]['results'] = results.copy()
+                            current_tasks[task_id]['last_update'] = time.time()
+                            save_results(task_id, results)
+                        
+                        # 停止处理当前流
+                        break
+                        
                     if not chunk.choices:
                         continue
                     if chunk.choices[0].delta and chunk.choices[0].delta.content:
@@ -104,6 +145,11 @@ def process_questions(task_id, questions, system_prompt, api_key):
                             except Exception as e:
                                 logger.error(f"保存中间结果出错: {str(e)}")
                 
+                # 检查是否因为暂停而中断了流式处理
+                if current_tasks[task_id].get('paused', False):
+                    # 不增加索引i，这样恢复时会重新处理当前问题
+                    continue
+                
                 # 流式输出完成后，移除streaming标记
                 if len(results) > i:
                     results[i]["is_streaming"] = False
@@ -128,13 +174,14 @@ def process_questions(task_id, questions, system_prompt, api_key):
                     results.append(result)
             
             # 更新进度
-            current_tasks[task_id]['completed'] = i + 1
+            i += 1  # 只有成功处理后才增加索引
+            current_tasks[task_id]['completed'] = i
             current_tasks[task_id]['results'] = results
             
             # 保存中间结果
             try:
                 save_results(task_id, results)
-                logger.info(f"已保存中间结果，完成度: {i+1}/{len(questions)}")
+                logger.info(f"已保存中间结果，完成度: {i}/{len(questions)}")
             except Exception as e:
                 logger.error(f"保存结果出错: {str(e)}")
             
@@ -143,6 +190,7 @@ def process_questions(task_id, questions, system_prompt, api_key):
             
         except Exception as e:
             logger.error(f"处理问题时出错: {str(e)}")
+            i += 1  # 错误时也要移至下一个问题
             continue
     
     current_tasks[task_id]['status'] = 'completed'
@@ -252,7 +300,8 @@ def get_task_status(task_id):
                 'status': 'completed',
                 'total': len(results),
                 'completed': len(results),
-                'results': results
+                'results': results,
+                'paused': False
             })
         logger.warning(f"API请求：未找到任务 {task_id}")
         return jsonify({'error': '未找到任务'}), 404
@@ -264,7 +313,9 @@ def get_task_status(task_id):
         'filename': task['filename'],
         'total': task['total'],
         'completed': task['completed'],
-        'results': task['results']
+        'results': task['results'],
+        'last_update': task.get('last_update', 0),
+        'paused': task.get('paused', False)
     })
 
 @app.route('/download/<task_id>')
@@ -294,6 +345,26 @@ def download_results(task_id):
         mimetype="text/csv",
         headers={"Content-disposition": f"attachment; filename=results_{task_id}.csv"}
     )
+
+@app.route('/api/task/<task_id>/control', methods=['POST'])
+def control_task(task_id):
+    """控制任务的暂停和继续"""
+    if task_id not in current_tasks:
+        return jsonify({'error': '任务不存在'}), 404
+    
+    data = request.get_json()
+    action = data.get('action')
+    
+    if action == 'pause':
+        current_tasks[task_id]['paused'] = True
+        logger.info(f"任务 {task_id} 已暂停")
+        return jsonify({'status': 'paused'})
+    elif action == 'resume':
+        current_tasks[task_id]['paused'] = False
+        logger.info(f"任务 {task_id} 已继续")
+        return jsonify({'status': 'resumed'})
+    else:
+        return jsonify({'error': '无效的操作'}), 400
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
