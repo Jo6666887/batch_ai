@@ -29,15 +29,28 @@
         .form-text {
             color: #6c757d;
         }
+        .last-task-info {
+            background-color: #f0f8ff;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="form-container">
             <div class="header">
-                <h1>批量问题处理系统</h1>
-                <p class="lead">上传Excel文件，使用AI批量回答问题</p>
+                <h1>批量问题处理系统@AI小组</h1>
+                <p class="lead">上传Excel文件,使用AI批量回答问题(*第一列设置为input）</p>
             </div>
+            
+            {% if last_task_id %}
+            <div class="last-task-info">
+                <p><strong>您有一个暂停的任务！</strong> 您可以<a href="/task/{{ last_task_id }}">返回该任务</a>继续处理，或开始新任务。</p>
+            </div>
+            {% endif %}
             
             <form action="/upload" method="post" enctype="multipart/form-data">
                 <div class="mb-4">
@@ -48,7 +61,7 @@
                 
                 <div class="mb-4">
                     <label for="system_prompt" class="form-label">系统提示词</label>
-                    <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">你是人工智能助手，能够提供专业、准确的回答。</textarea>
+                    <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">{{ system_prompt|default('你是人工智能助手，能够提供专业、准确的回答。') }}</textarea>
                     <div class="form-text">设置AI助手的行为和角色</div>
                 </div>
                 

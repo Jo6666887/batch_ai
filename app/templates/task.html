@@ -147,6 +147,8 @@
                         <button id="control-btn" class="btn btn-warning me-2">终止任务</button>
                         <a id="back-btn" href="/" class="btn btn-outline-secondary">返回首页</a>
                         <a id="download-btn" href="/download/{{ task_id }}" class="btn btn-success">下载结果</a>
+                        <!-- 如果从任务页面直接点击返回，使用这个隐藏链接 -->
+                        <a id="back-with-settings-btn" href="/?last_task_id={{ task_id }}" style="display: none;"></a>
                     </div>
                 </div>
                 <div class="progress">
@@ -207,6 +209,20 @@
                 updateControlButton();
                 // 请求成功后重新启用按钮
                 controlBtn.disabled = false;
+                
+                // 如果是暂停操作，显示返回首页的选项
+                if (action === 'pause') {
+                    // 修改返回首页按钮，附加任务ID参数
+                    document.getElementById('back-btn').href = `/?last_task_id=${taskId}`;
+                    
+                    // 弹出提示
+                    const shouldReturn = confirm('任务已暂停！\n\n您可以点击"继续任务"按钮恢复处理，\n或者现在返回首页（将保留您的提示词设置）。\n\n是否现在返回首页？');
+                    
+                    if (shouldReturn) {
+                        window.location.href = `/?last_task_id=${taskId}`;
+                    }
+                }
+                
                 // 如果恢复任务，立即刷新状态
                 if (action === 'resume') {
                     updateStatus();

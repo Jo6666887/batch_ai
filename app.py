@@ -224,6 +224,14 @@ def save_results(task_id, results):
 
 @app.route('/')
 def index():
+    # 检查是否有保存的任务状态
+    last_task_id = request.args.get('last_task_id')
+    if last_task_id and last_task_id in current_tasks:
+        task = current_tasks[last_task_id]
+        system_prompt = task.get('system_prompt', '')
+        return render_template('index.html', 
+                              last_task_id=last_task_id,
+                              system_prompt=system_prompt)
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
@@ -263,6 +271,9 @@ def upload_file():
             # 启动后台处理线程
             current_tasks[task_id] = {
                 'filename': filename,
+                'original_file_path': filepath,  # 保存原始文件路径
+                'system_prompt': system_prompt,  # 保存系统提示词
+                'api_key': api_key,  # 保存API密钥
                 'status': 'starting',
                 'total': len(questions),
                 'completed': 0,
@@ -385,7 +396,13 @@ def control_task(task_id):
     if action == 'pause':
         current_tasks[task_id]['paused'] = True
         logger.info(f"任务 {task_id} 已暂停")
-        return jsonify({'status': 'paused'})
+        return jsonify({
+            'status': 'paused',
+            'task_info': {
+                'system_prompt': current_tasks[task_id].get('system_prompt', ''),
+                'filename': current_tasks[task_id].get('filename', '')
+            }
+        })
     elif action == 'resume':
         current_tasks[task_id]['paused'] = False
         logger.info(f"任务 {task_id} 已继续")
