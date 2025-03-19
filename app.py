@@ -31,8 +31,9 @@ os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
 # 全局变量用于存储当前正在处理的任务
 current_tasks = {}
 
-def process_questions(task_id, questions, system_prompt, api_key):
+def process_questions(task_id, questions, system_prompt, api_key, temperature):
     """后台处理问题的函数"""
+    logger.info(f"开始处理任务 {task_id}，使用温度参数: {temperature}")
     results = []
     current_tasks[task_id]['status'] = 'processing'
     current_tasks[task_id]['total'] = len(questions)
@@ -78,7 +79,7 @@ def process_questions(task_id, questions, system_prompt, api_key):
             logger.info(f"重新处理被中断的问题，索引: {i}")
             
         try:
-            logger.info(f"处理问题 {i+1}/{len(questions)}")
+            logger.info(f"处理问题 {i+1}/{len(questions)}，使用温度: {temperature}")
             
             # 如果问题为空，跳过
             if pd.isna(question) or str(question).strip() == '':
@@ -100,7 +101,7 @@ def process_questions(task_id, questions, system_prompt, api_key):
                         {"role": "user", "content": question}
                     ],
                     stream=True,
-                    temperature=0.5
+                    temperature=float(temperature)  # 确保temperature是float类型
                 )
                 
                 # 实时收集流式响应
@@ -229,9 +230,11 @@ def index():
     if last_task_id and last_task_id in current_tasks:
         task = current_tasks[last_task_id]
         system_prompt = task.get('system_prompt', '')
+        temperature = task.get('temperature', 0.7)
         return render_template('index.html', 
                               last_task_id=last_task_id,
-                              system_prompt=system_prompt)
+                              system_prompt=system_prompt,
+                              temperature=temperature)
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
@@ -242,6 +245,8 @@ def upload_file():
     file = request.files['file']
     system_prompt = request.form.get('system_prompt', '你是人工智能助手。')
     api_key = request.form.get('api_key', os.getenv('ARK_API_KEY', ''))
+    temperature = float(request.form.get('temperature', 0.7))  # 获取温度参数，默认0.7
+    logger.info(f"收到温度参数: {temperature}")
     
     if file.filename == '':
         return redirect(request.url)
@@ -274,6 +279,7 @@ def upload_file():
                 'original_file_path': filepath,  # 保存原始文件路径
                 'system_prompt': system_prompt,  # 保存系统提示词
                 'api_key': api_key,  # 保存API密钥
+                'temperature': temperature,  # 保存温度参数
                 'status': 'starting',
                 'total': len(questions),
                 'completed': 0,
@@ -282,7 +288,7 @@ def upload_file():
             
             thread = threading.Thread(
                 target=process_questions,
-                args=(task_id, questions, system_prompt, api_key)
+                args=(task_id, questions, system_prompt, api_key, temperature)  # 传递温度参数
             )
             thread.daemon = True
             thread.start()
@@ -400,7 +406,8 @@ def control_task(task_id):
             'status': 'paused',
             'task_info': {
                 'system_prompt': current_tasks[task_id].get('system_prompt', ''),
-                'filename': current_tasks[task_id].get('filename', '')
+                'filename': current_tasks[task_id].get('filename', ''),
+                'temperature': current_tasks[task_id].get('temperature', 0.7)
             }
         })
     elif action == 'resume':
