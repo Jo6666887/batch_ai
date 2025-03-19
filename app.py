@@ -39,6 +39,8 @@ def process_questions(task_id, questions, system_prompt, api_key):
     current_tasks[task_id]['completed'] = 0
     current_tasks[task_id]['paused'] = False  # 添加暂停状态标记
     current_tasks[task_id]['last_update'] = time.time()  # 初始化更新时间
+    current_tasks[task_id]['current_index'] = 0  # 当前处理的索引
+    current_tasks[task_id]['interrupted'] = False  # 是否中断标记
     
     # 使用实际的API密钥
     actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
@@ -51,8 +53,10 @@ def process_questions(task_id, questions, system_prompt, api_key):
     
     i = 0
     while i < len(questions):
+        current_tasks[task_id]['current_index'] = i  # 更新当前索引
+        
         # 检查是否暂停
-        if current_tasks[task_id].get('paused', False):
+        while current_tasks[task_id].get('paused', False):
             logger.info(f"任务 {task_id} 已暂停，等待继续...")
             # 暂停时每秒检查一次状态
             time.sleep(1)
@@ -60,10 +64,19 @@ def process_questions(task_id, questions, system_prompt, api_key):
             if task_id not in current_tasks:
                 logger.info(f"任务 {task_id} 已被删除，终止处理")
                 return results
-            # 继续循环，不处理问题
-            continue
+            # 当状态改变时立即退出循环
+            if not current_tasks[task_id].get('paused', False):
+                logger.info(f"任务 {task_id} 已恢复")
+                break
             
         question = questions[i]
+        
+        # 检查是否被标记为中断
+        was_interrupted = False
+        if len(results) > i and results[i].get('interrupted', False):
+            was_interrupted = True
+            logger.info(f"重新处理被中断的问题，索引: {i}")
+            
         try:
             logger.info(f"处理问题 {i+1}/{len(questions)}")
             
@@ -87,7 +100,7 @@ def process_questions(task_id, questions, system_prompt, api_key):
                         {"role": "user", "content": question}
                     ],
                     stream=True,
-                    temperature=0.7
+                    temperature=0.5
                 )
                 
                 # 实时收集流式响应
@@ -111,6 +124,7 @@ def process_questions(task_id, questions, system_prompt, api_key):
                             
                             current_tasks[task_id]['results'] = results.copy()
                             current_tasks[task_id]['last_update'] = time.time()
+                            current_tasks[task_id]['interrupted'] = True
                             save_results(task_id, results)
                         
                         # 停止处理当前流
@@ -153,6 +167,9 @@ def process_questions(task_id, questions, system_prompt, api_key):
                 # 流式输出完成后，移除streaming标记
                 if len(results) > i:
                     results[i]["is_streaming"] = False
+                    # 如果这是一个被中断重新处理的问题，移除interrupted标记
+                    if was_interrupted:
+                        results[i].pop('interrupted', None)
                 logger.info(f"成功获取流式回答: {answer[:100]}...")
                 
             except Exception as e:
@@ -194,6 +211,7 @@ def process_questions(task_id, questions, system_prompt, api_key):
             continue
     
     current_tasks[task_id]['status'] = 'completed'
+    current_tasks[task_id]['interrupted'] = False
     save_results(task_id, results)
     logger.info(f"任务 {task_id} 完成，共处理了 {len(results)} 个问题")
     return results
@@ -279,7 +297,11 @@ def task_status(task_id):
                 'status': 'completed',
                 'total': len(results),
                 'completed': len(results),
-                'results': results
+                'results': results,
+                'paused': False,
+                'last_update': time.time(),
+                'interrupted': False,
+                'current_index': len(results)
             }
             logger.info(f"从文件恢复任务 {task_id}，共 {len(results)} 个结果")
         else:
@@ -301,7 +323,10 @@ def get_task_status(task_id):
                 'total': len(results),
                 'completed': len(results),
                 'results': results,
-                'paused': False
+                'paused': False,
+                'interrupted': False,
+                'current_index': -1,
+                'last_update': time.time()
             })
         logger.warning(f"API请求：未找到任务 {task_id}")
         return jsonify({'error': '未找到任务'}), 404
@@ -314,8 +339,10 @@ def get_task_status(task_id):
         'total': task['total'],
         'completed': task['completed'],
         'results': task['results'],
-        'last_update': task.get('last_update', 0),
-        'paused': task.get('paused', False)
+        'last_update': task.get('last_update', time.time()),
+        'paused': task.get('paused', False),
+        'interrupted': task.get('interrupted', False),
+        'current_index': task.get('current_index', -1)
     })
 
 @app.route('/download/<task_id>')

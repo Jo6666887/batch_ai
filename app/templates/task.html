@@ -20,6 +20,7 @@
             border-radius: 10px;
             box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
             margin-bottom: 2rem;
+            padding-top: 100px; /* 为固定控制面板留出空间 */
         }
         .header {
             text-align: center;
@@ -71,6 +72,17 @@
         }
         .status-info {
             margin-bottom: 1.5rem;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            padding: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-width: 1000px;
+            margin: 0 auto;
+            border-radius: 0 0 10px 10px;
         }
         #download-btn {
             display: none;
@@ -114,16 +126,20 @@
         .question.expanded {
             max-height: none;
         }
+        .auto-scroll-toggle {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+        }
+        .auto-scroll-toggle label {
+            margin-left: 10px;
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="task-container">
-            <div class="header">
-                <h1>批量问题处理</h1>
-                <p class="lead">任务状态与结果</p>
-            </div>
-            
             <div class="status-info">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <h5 id="status-text">正在加载...</h5>
@@ -138,6 +154,15 @@
                          role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
                 </div>
                 <p id="progress-text" class="text-muted mt-2">处理进度: 0/0</p>
+                <div class="auto-scroll-toggle">
+                    <input type="checkbox" id="auto-scroll" checked>
+                    <label for="auto-scroll">自动滚动到最新内容</label>
+                </div>
+            </div>
+            
+            <div class="header">
+                <h1>批量问题处理</h1>
+                <p class="lead">任务状态与结果</p>
             </div>
             
             <div id="results-container">
@@ -153,6 +178,7 @@
         let lastUpdateTime = 0;
         let isTaskPaused = false;
         let lastTaskStatus = '';
+        let autoScroll = true; // 默认启用自动滚动
         
         // 控制按钮点击处理
         const controlBtn = document.getElementById('control-btn');
@@ -193,6 +219,11 @@
             });
         });
         
+        // 自动滚动开关
+        document.getElementById('auto-scroll').addEventListener('change', function() {
+            autoScroll = this.checked;
+        });
+        
         // 更新控制按钮状态
         function updateControlButton() {
             if (isTaskPaused) {
@@ -210,7 +241,7 @@
         
         // 更新状态函数
         function updateStatus() {
-            // 如果暂停中，仍然需要定期检查状态，但降低频率
+            // 即使暂停也继续轮询，但降低频率
             const pollInterval = isTaskPaused ? 3000 : 1000;
             
             fetch(`/api/task/${taskId}`)
@@ -240,6 +271,8 @@
                             controlBtn.style.display = 'none';  // 隐藏控制按钮
                         } else if (data.status === 'failed') {
                             statusText = '❌ 处理失败';
+                        } else if (data.paused) {
+                            statusText = '⏸️ 已暂停，可点击继续';
                         }
                         document.getElementById('status-text').textContent = statusText;
                     }
@@ -284,6 +317,8 @@
         // 更新结果列表
         function updateResults(results) {
             const container = document.getElementById('results-container');
+            let shouldScroll = false;
+            let scrollTarget = null;
             
             results.forEach((result, index) => {
                 const existingCard = container.children[index];
@@ -317,23 +352,33 @@
                     
                     if (shouldUpdate) {
                         existingCard.outerHTML = cardHtml;
+                        if (isStreaming) {
+                            shouldScroll = true;
+                            scrollTarget = index;
+                        }
                     }
                 } else {
                     container.insertAdjacentHTML('beforeend', cardHtml);
-                }
-                
-                // 只在真正流式输出时滚动
-                if (isStreaming) {
-                    const card = container.children[index];
-                    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                    if (isStreaming) {
+                        shouldScroll = true;
+                        scrollTarget = index;
+                    }
                 }
                 
                 // 检查问题是否需要展开按钮
-                const questionDiv = container.children[index].querySelector('.question');
+                const questionDiv = container.children[index]?.querySelector('.question');
                 if (questionDiv && questionDiv.scrollHeight > questionDiv.clientHeight) {
                     questionDiv.classList.add('truncated');
                 }
             });
+            
+            // 只在启用了自动滚动且有需要滚动的内容时进行滚动
+            if (autoScroll && shouldScroll && scrollTarget !== null) {
+                const card = container.children[scrollTarget];
+                if (card) {
+                    card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }
+            }
         }
         
         // 切换问题显示状态
