@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>批量问题处理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background-color: #f8f9fa;
+        }
+        .form-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .form-label {
+            font-weight: 500;
+        }
+        .form-text {
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-container">
+            <div class="header">
+                <h1>批量问题处理系统</h1>
+                <p class="lead">上传Excel文件，使用AI批量回答问题</p>
+            </div>
+            
+            <form action="/upload" method="post" enctype="multipart/form-data">
+                <div class="mb-4">
+                    <label for="file" class="form-label">上传Excel文件</label>
+                    <input class="form-control" type="file" id="file" name="file" accept=".xlsx,.xls" required>
+                    <div class="form-text">请上传包含一列问题的Excel文件</div>
+                </div>
+                
+                <div class="mb-4">
+                    <label for="system_prompt" class="form-label">系统提示词</label>
+                    <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">你是人工智能助手，能够提供专业、准确的回答。</textarea>
+                    <div class="form-text">设置AI助手的行为和角色</div>
+                </div>
+                
+                <div class="mb-4">
+                    <label for="api_key" class="form-label">API密钥 (可选)</label>
+                    <input type="text" class="form-control" id="api_key" name="api_key" placeholder="如不填写将使用系统默认API密钥">
+                    <div class="form-text">如有自己的API密钥，可以在此处填写</div>
+                </div>
+                
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary btn-lg">开始处理</button>
+                </div>
+            </form>
+            
+            <div class="mt-4 text-center">
+                <p class="form-text">上传后系统将自动处理问题并展示结果，过程中生成的内容会自动保存</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 
