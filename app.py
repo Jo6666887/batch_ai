@@ -8,6 +8,7 @@ import threading
 import time
 from dotenv import load_dotenv
 import logging
+from volcenginesdkarkruntime import Ark
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -40,11 +41,11 @@ def process_questions(task_id, questions, system_prompt, api_key):
     # 使用实际的API密钥
     actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
     
-    # 设置API请求头
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {actual_api_key}"
-    }
+    # 初始化Ark客户端
+    client = Ark(
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        api_key=actual_api_key
+    )
     
     for i, question in enumerate(questions):
         try:
@@ -58,84 +59,94 @@ def process_questions(task_id, questions, system_prompt, api_key):
             # 确保问题是字符串类型
             question = str(question).strip()
             
-            # 准备请求数据
-            data = {
-                "model": "ep-20250317192842-2mhtn",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": question}
-                ]
-            }
-            
-            # 发送API请求
-            logger.info(f"发送API请求: {question[:100]}...")
-            response = requests.post(
-                "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=30  # 添加超时设置
-            )
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                answer = response_data['choices'][0]['message']['content']
-                logger.info(f"成功获取回答: {answer[:100]}...")
-            else:
-                error_msg = f"API请求失败: {response.status_code} - {response.text}"
+            # 使用流式API
+            answer = ""
+            try:
+                # 发送流式请求
+                stream = client.chat.completions.create(
+                    model="ep-20250317192842-2mhtn",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": question}
+                    ],
+                    stream=True
+                )
+                
+                # 实时收集流式响应
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    if chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        answer += chunk.choices[0].delta.content
+                        
+                        # 每次有新内容时更新当前任务状态
+                        result = {
+                            "question": question,
+                            "answer": answer,
+                            "is_streaming": True
+                        }
+                        
+                        # 更新当前结果
+                        if len(results) > i:
+                            results[i] = result
+                        else:
+                            results.append(result)
+                            
+                        # 更新任务状态
+                        current_tasks[task_id]['results'] = results.copy()
+                        current_tasks[task_id]['last_update'] = time.time()
+                        
+                        # 每积累一定字符保存一次中间结果
+                        if len(answer) % 50 == 0:
+                            try:
+                                save_results(task_id, results)
+                            except Exception as e:
+                                logger.error(f"保存中间结果出错: {str(e)}")
+                
+                # 流式输出完成后，移除streaming标记
+                if len(results) > i:
+                    results[i]["is_streaming"] = False
+                logger.info(f"成功获取流式回答: {answer[:100]}...")
+                
+            except Exception as e:
+                error_msg = f"处理出错: {str(e)}"
                 logger.error(error_msg)
                 answer = error_msg
                 
-        except requests.exceptions.Timeout:
-            error_msg = "请求超时，将在3秒后重试..."
-            logger.error(error_msg)
-            time.sleep(3)
-            try:
-                # 重试一次
-                response = requests.post(
-                    "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-                    headers=headers,
-                    json=data,
-                    timeout=30
-                )
-                if response.status_code == 200:
-                    response_data = response.json()
-                    answer = response_data['choices'][0]['message']['content']
-                    logger.info(f"重试成功: {answer[:100]}...")
-                else:
-                    answer = f"重试失败: {response.status_code} - {response.text}"
-                    logger.error(answer)
-            except Exception as e:
-                answer = f"重试出错: {str(e)}"
-                logger.error(answer)
+                # 记录错误结果
+                result = {
+                    "question": question,
+                    "answer": answer,
+                    "is_streaming": False,
+                    "error": True
+                }
                 
+                if len(results) > i:
+                    results[i] = result
+                else:
+                    results.append(result)
+            
+            # 更新进度
+            current_tasks[task_id]['completed'] = i + 1
+            current_tasks[task_id]['results'] = results
+            
+            # 保存中间结果
+            try:
+                save_results(task_id, results)
+                logger.info(f"已保存中间结果，完成度: {i+1}/{len(questions)}")
+            except Exception as e:
+                logger.error(f"保存结果出错: {str(e)}")
+            
+            # 添加短暂延迟，避免请求过于频繁
+            time.sleep(0.5)
+            
         except Exception as e:
-            error_msg = f"处理出错: {str(e)}"
-            logger.error(error_msg)
-            answer = error_msg
-        
-        result = {
-            "question": question,
-            "answer": answer
-        }
-        results.append(result)
-        
-        # 更新进度
-        current_tasks[task_id]['completed'] = i + 1
-        current_tasks[task_id]['results'] = results
-        
-        # 保存中间结果，防止任务中断
-        try:
-            save_results(task_id, results)
-            logger.info(f"已保存中间结果，完成度: {i+1}/{len(questions)}")
-        except Exception as e:
-            logger.error(f"保存结果出错: {str(e)}")
-        
-        # 添加短暂延迟，避免请求过于频繁
-        time.sleep(2)  # 增加延迟到2秒
+            logger.error(f"处理问题时出错: {str(e)}")
+            continue
     
     current_tasks[task_id]['status'] = 'completed'
     save_results(task_id, results)
-    logger.info(f"任务 {task_id} 完成")
+    logger.info(f"任务 {task_id} 完成，共处理了 {len(results)} 个问题")
     return results
 
 def save_results(task_id, results):
@@ -169,8 +180,18 @@ def upload_file():
         
         # 读取Excel文件
         try:
+            logger.info(f"读取Excel文件: {filepath}")
             df = pd.read_excel(filepath)
-            questions = df.iloc[:, 0].tolist()  # 获取第一列的所有值
+            logger.info(f"Excel文件形状: {df.shape}")
+            
+            # 获取所有非空问题
+            questions = []
+            for i, value in enumerate(df.iloc[:, 0]):
+                if pd.notna(value) and str(value).strip():
+                    questions.append(str(value).strip())
+                    logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
+            
+            logger.info(f"共找到 {len(questions)} 个有效问题")
             
             # 启动后台处理线程
             current_tasks[task_id] = {
@@ -191,6 +212,9 @@ def upload_file():
             return redirect(url_for('task_status', task_id=task_id))
         
         except Exception as e:
+            logger.error(f"处理文件时出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return f"处理文件时出错: {str(e)}", 500
 
 @app.route('/task/<task_id>')
@@ -208,7 +232,9 @@ def task_status(task_id):
                 'completed': len(results),
                 'results': results
             }
+            logger.info(f"从文件恢复任务 {task_id}，共 {len(results)} 个结果")
         else:
+            logger.warning(f"未找到任务 {task_id}")
             return "未找到任务", 404
     
     return render_template('task.html', task_id=task_id)
@@ -220,15 +246,18 @@ def get_task_status(task_id):
         if os.path.exists(result_file):
             with open(result_file, 'r', encoding='utf-8') as f:
                 results = json.load(f)
+            logger.info(f"API请求：任务 {task_id} 从文件加载，包含 {len(results)} 个结果")
             return jsonify({
                 'status': 'completed',
                 'total': len(results),
                 'completed': len(results),
                 'results': results
             })
+        logger.warning(f"API请求：未找到任务 {task_id}")
         return jsonify({'error': '未找到任务'}), 404
     
     task = current_tasks[task_id]
+    logger.info(f"API请求：获取任务 {task_id} 状态，{task['completed']}/{task['total']}")
     return jsonify({
         'status': task['status'],
         'filename': task['filename'],
@@ -243,10 +272,13 @@ def download_results(task_id):
     
     result_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
     if not os.path.exists(result_file):
+        logger.warning(f"下载请求：未找到任务 {task_id} 的结果文件")
         return "结果文件不存在", 404
     
     with open(result_file, 'r', encoding='utf-8') as f:
         results = json.load(f)
+    
+    logger.info(f"下载请求：生成任务 {task_id} 的CSV文件，包含 {len(results)} 个结果")
     
     # 创建CSV格式的响应
     csv_data = "问题,回答\n"
@@ -263,4 +295,4 @@ def download_results(task_id):
     )
 
 if __name__ == '__main__':
-    app.run(debug=True) 
+    app.run(host='0.0.0.0', port=8080, debug=True)
