@@ -280,6 +280,18 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
                         while len(batch_results) <= idx:
                             batch_results.append(None)
                         batch_results[idx] = result
+                        
+                        # 实时更新任务状态，而不是等待批处理完成
+                        if idx + start_idx < len(current_tasks[task_id]['results']):
+                            current_tasks[task_id]['results'][idx + start_idx] = result
+                        else:
+                            # 扩展结果列表
+                            while len(current_tasks[task_id]['results']) <= idx + start_idx:
+                                current_tasks[task_id]['results'].append(None)
+                            current_tasks[task_id]['results'][idx + start_idx] = result
+                        
+                        # 更新最后更新时间，以便前端可以更快地获取结果
+                        current_tasks[task_id]['last_update'] = time.time()
                     
                     # 检查是否因为暂停而中断了流式处理
                     if current_tasks[task_id].get('paused', False):
@@ -331,7 +343,7 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
         return batch_results
     
     # 将问题分成较小的批次并行处理
-    batch_size = 3  # 每批最多处理3个问题
+    batch_size = 4  # 每批最多处理4个问题
     i = 0
     while i < len(questions):
         # 检查任务是否暂停或删除

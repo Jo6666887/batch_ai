@@ -325,11 +325,11 @@
                     } else if (isTaskPaused) {
                         nextPollInterval = 3000; // 暂停时每3秒轮询一次
                     } else if (timeSinceLastUpdate < 5) {
-                        nextPollInterval = 500; // 最近有更新，快速轮询
+                        nextPollInterval = 300; // 最近有更新，更快地轮询（原来是500ms）
                     } else if (timeSinceLastUpdate < 30) {
-                        nextPollInterval = 1000; // 30秒内有更新，正常轮询
+                        nextPollInterval = 800; // 30秒内有更新，正常轮询（原来是1000ms）
                     } else {
-                        nextPollInterval = 2000; // 长时间无更新，降低轮询频率
+                        nextPollInterval = 1500; // 长时间无更新，降低轮询频率（原来是2000ms）
                     }
                     
                     setTimeout(updateStatus, nextPollInterval);
