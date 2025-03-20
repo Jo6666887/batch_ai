@@ -973,37 +973,46 @@ def download_generated_questions(task_id):
     else:
         return "不支持的格式类型", 400
 
+@app.route('/api/generation/<task_id>/pause', methods=['POST'])
+def pause_generation(task_id):
+    """暂停问题生成任务"""
+    if task_id in current_tasks:
+        current_tasks[task_id]['paused'] = True
+        current_tasks[task_id]['last_update'] = time.time()
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': '任务不存在'}), 404
+
+@app.route('/api/generation/<task_id>/resume', methods=['POST'])
+def resume_generation(task_id):
+    """继续问题生成任务"""
+    if task_id in current_tasks:
+        current_tasks[task_id]['paused'] = False
+        current_tasks[task_id]['last_update'] = time.time()
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': '任务不存在'}), 404
+
 def process_question_generation(task_id, prompt, system_prompt, api_key, temperature, model_provider="volcano", base_url=None, model_name=None):
     """后台处理问题生成的函数"""
-    logger.info(f"开始生成问题任务 {task_id}，使用温度参数: {temperature}，模型提供商: {model_provider}")
-    results = []
+    logger.info(f"开始处理问题生成任务 {task_id}")
+    
+    # 初始化任务状态
     current_tasks[task_id]['status'] = 'processing'
+    current_tasks[task_id]['is_streaming'] = True
     current_tasks[task_id]['last_update'] = time.time()
-    current_tasks[task_id]['results'] = []  # 初始化空结果列表
-    current_tasks[task_id]['is_streaming'] = True  # 标记为流式处理
     
-    # 使用实际的API密钥
-    actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
-    
-    # 根据提供商初始化客户端
+    # 创建API客户端
     if model_provider == "volcano":
-        # 火山引擎客户端初始化
-        actual_base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
-        actual_model = model_name if model_name else "ep-20250317192842-2mhtn"
-        
         client = Ark(
-            base_url=actual_base_url,
-            api_key=actual_api_key
+            base_url=base_url,
+            api_key=api_key
         )
+        actual_model = model_name
     else:
-        # OpenAI客户端初始化
-        actual_base_url = base_url if base_url else "https://api.openai.com/v1"
-        actual_model = model_name if model_name else "gpt-4o"
-        
         client = openai.OpenAI(
-            api_key=actual_api_key,
-            base_url=actual_base_url
+            api_key=api_key,
+            base_url=base_url
         )
+        actual_model = "gpt-3.5-turbo"
     
     try:
         logger.info(f"发送生成问题请求，温度: {temperature}")
@@ -1033,6 +1042,16 @@ def process_question_generation(task_id, prompt, system_prompt, api_key, tempera
         # 实时收集流式响应
         generated_text = ""
         for chunk in stream:
+            # 检查是否暂停
+            if current_tasks[task_id].get('paused', False):
+                logger.info(f"任务 {task_id} 已暂停，等待继续...")
+                while current_tasks[task_id].get('paused', False):
+                    time.sleep(1)
+                    if task_id not in current_tasks:
+                        logger.info(f"任务 {task_id} 已被删除，终止处理")
+                        return []
+                logger.info(f"任务 {task_id} 已恢复")
+            
             # 提取内容
             if model_provider == "volcano":
                 if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:

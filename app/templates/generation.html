@@ -86,6 +86,8 @@
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <h5 id="status-text">正在加载...</h5>
                     <div>
+                        <button id="pause-btn" class="btn btn-warning me-2" style="display: none;">暂停生成</button>
+                        <button id="resume-btn" class="btn btn-success me-2" style="display: none;">继续生成</button>
                         <a id="back-btn" href="/" class="btn btn-outline-secondary me-2">返回首页</a>
                         <div class="dropdown d-inline-block" id="download-dropdown" style="display: none;">
                             <button class="btn btn-success dropdown-toggle" type="button" id="downloadDropdownButton" data-bs-toggle="dropdown" aria-expanded="false">
@@ -268,15 +270,29 @@
                     let statusText = '正在生成问题...';
                     if (data.is_streaming) {
                         statusText = '🟢 正在流式生成问题...';
+                        if (data.paused) {
+                            statusText = '⏸️ 生成已暂停';
+                            document.getElementById('pause-btn').style.display = 'none';
+                            document.getElementById('resume-btn').style.display = 'inline-block';
+                            document.getElementById('progress-bar').classList.remove('progress-bar-animated');
+                        } else {
+                            document.getElementById('pause-btn').style.display = 'inline-block';
+                            document.getElementById('resume-btn').style.display = 'none';
+                            document.getElementById('progress-bar').classList.add('progress-bar-animated');
+                        }
                     } else if (data.status === 'completed') {
                         statusText = '✅ 问题生成完成';
                         document.getElementById('download-dropdown').style.display = 'inline-block';
                         document.getElementById('progress-bar').classList.remove('progress-bar-animated');
                         document.getElementById('action-buttons').style.display = 'flex';
                         document.getElementById('loading-indicator').style.display = 'none';
+                        document.getElementById('pause-btn').style.display = 'none';
+                        document.getElementById('resume-btn').style.display = 'none';
                     } else if (data.status === 'failed') {
                         statusText = '❌ 生成失败';
                         document.getElementById('loading-indicator').style.display = 'none';
+                        document.getElementById('pause-btn').style.display = 'none';
+                        document.getElementById('resume-btn').style.display = 'none';
                     }
                     document.getElementById('status-text').textContent = statusText;
                     
@@ -370,6 +386,48 @@
         // 页面加载完成后开始轮询状态
         document.addEventListener('DOMContentLoaded', function() {
             updateStatus();
+            
+            // 添加暂停按钮事件监听
+            document.getElementById('pause-btn').addEventListener('click', function() {
+                fetch(`/api/generation/${taskId}/pause`, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            this.style.display = 'none';
+                            document.getElementById('resume-btn').style.display = 'inline-block';
+                            document.getElementById('status-text').textContent = '⏸️ 生成已暂停';
+                            // 移除进度条动画
+                            document.getElementById('progress-bar').classList.remove('progress-bar-animated');
+                        } else {
+                            console.error('暂停失败:', data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('暂停请求失败:', error);
+                        alert('暂停失败，请重试');
+                    });
+            });
+            
+            // 添加继续按钮事件监听
+            document.getElementById('resume-btn').addEventListener('click', function() {
+                fetch(`/api/generation/${taskId}/resume`, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            this.style.display = 'none';
+                            document.getElementById('pause-btn').style.display = 'inline-block';
+                            document.getElementById('status-text').textContent = '🟢 正在生成问题...';
+                            // 恢复进度条动画
+                            document.getElementById('progress-bar').classList.add('progress-bar-animated');
+                        } else {
+                            console.error('继续失败:', data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('继续请求失败:', error);
+                        alert('继续失败，请重试');
+                    });
+            });
         });
     </script>
 </body>
