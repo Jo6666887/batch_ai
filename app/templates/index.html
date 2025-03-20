@@ -74,14 +74,25 @@
             font-size: 1.1rem;
             color: #0093E9;
         }
+        .settings-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="form-container">
-            <div class="header">
-                <h1 class="text-3xl font-bold text-gray-800">批量问题处理系统@AI小组</h1>
-                <p class="lead text-gray-600 mt-2">上传Excel文件，使用AI批量回答问题(*第一列设置为input）</p>
+            <div class="header position-relative">
+                <!-- 设置按钮 -->
+                <button type="button" class="btn btn-sm btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                    <i class="bi bi-gear-fill"></i> 模型设置
+                </button>
+                <h1 class="text-3xl font-bold text-gray-800">BATCH-AI @ZJW</h1>
+                <h1 class="text-3xl font-bold text-gray-800">批量问题处理系统</h1>
+                <p class="lead text-gray-600 mt-2">上传Excel文件，使用AI批量回答问题</p>
             </div>
             
             {% if last_task_id %}
@@ -91,6 +102,14 @@
             {% endif %}
             
             <form action="/upload" method="post" enctype="multipart/form-data">
+                <!-- 隐藏字段用于保存当前选择的设置 -->
+                <input type="hidden" id="model_provider" name="model_provider" value="{{ model_provider|default('volcano') }}">
+                <input type="hidden" id="api_key" name="api_key" value="">
+                <input type="hidden" id="volcano_base_url" name="volcano_base_url" value="{{ volcano_base_url|default('https://ark.cn-beijing.volces.com/api/v3') }}">
+                <input type="hidden" id="volcano_model" name="volcano_model" value="{{ volcano_model|default('ep-20250317192842-2mhtn') }}">
+                <input type="hidden" id="openai_base_url" name="openai_base_url" value="{{ openai_base_url|default('https://api.openai.com/v1') }}">
+                <input type="hidden" id="openai_model" name="openai_model" value="{{ openai_model|default('gpt-4o') }}">
+                
                 <div class="mb-4">
                     <label for="file" class="form-label">上传Excel文件</label>
                     <input class="form-control" type="file" id="file" name="file" accept=".xlsx,.xls" required>
@@ -102,7 +121,7 @@
                     <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">{{ system_prompt|default('你是人工智能助手，能够提供专业、准确的回答。') }}</textarea>
                     <div class="form-text">设置AI助手的行为和角色</div>
                 </div>
-                
+
                 <div class="mb-4">
                     <label class="form-label">模型创造性 (Temperature)</label>
                     <div class="temperature-slider">
@@ -112,57 +131,11 @@
                             <span>平衡</span>
                             <span>创造性</span>
                         </div>
-                        <div class="temperature-display">
-                            当前值: <span id="temperature-value">{{ temperature|default(0.7) }}</span>
-                        </div>
+                    </div>
+                    <div class="temperature-display">
+                        当前值: <span id="temperature-value">{{ temperature|default(0.7) }}</span>
                     </div>
                     <div class="form-text">较低的值使回答更加确定和一致，较高的值使回答更加多样化和创造性</div>
-                </div>
-                
-                <div class="mb-3">
-                    <label class="form-label">选择模型提供商</label>
-                    <div class="d-flex">
-                        <div class="form-check me-4">
-                            <input class="form-check-input" type="radio" name="model_provider" id="provider_volcano" value="volcano" {% if model_provider != 'openai' %}checked{% endif %}>
-                            <label class="form-check-label" for="provider_volcano">
-                                火山引擎
-                            </label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="radio" name="model_provider" id="provider_openai" value="openai" {% if model_provider == 'openai' %}checked{% endif %}>
-                            <label class="form-check-label" for="provider_openai">
-                                OpenAI
-                            </label>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="mb-3">
-                    <label for="api_key" class="form-label">API密钥（可选）</label>
-                    <input type="password" class="form-control" id="api_key" name="api_key" placeholder="API密钥">
-                    <div class="form-text" id="api_key_help">如不填写，使用系统默认密钥</div>
-                </div>
-                
-                <div id="volcano_settings" {% if model_provider == 'openai' %}style="display:none;"{% endif %}>
-                    <div class="mb-3">
-                        <label for="volcano_base_url" class="form-label">火山引擎基础URL（可选）</label>
-                        <input type="text" class="form-control" id="volcano_base_url" name="volcano_base_url" placeholder="https://ark.cn-beijing.volces.com/api/v3" value="{{ volcano_base_url|default('https://ark.cn-beijing.volces.com/api/v3') }}">
-                    </div>
-                    <div class="mb-3">
-                        <label for="volcano_model" class="form-label">火山引擎模型（可选）</label>
-                        <input type="text" class="form-control" id="volcano_model" name="volcano_model" placeholder="ep-20250317192842-2mhtn" value="{{ volcano_model|default('ep-20250317192842-2mhtn') }}">
-                    </div>
-                </div>
-                
-                <div id="openai_settings" {% if model_provider != 'openai' %}style="display:none;"{% endif %}>
-                    <div class="mb-3">
-                        <label for="openai_base_url" class="form-label">OpenAI基础URL（可选）</label>
-                        <input type="text" class="form-control" id="openai_base_url" name="openai_base_url" placeholder="https://api.openai.com/v1" value="{{ openai_base_url|default('https://api.openai.com/v1') }}">
-                    </div>
-                    <div class="mb-3">
-                        <label for="openai_model" class="form-label">OpenAI模型</label>
-                        <input type="text" class="form-control" id="openai_model" name="openai_model" placeholder="gpt-4o" value="{{ openai_model|default('gpt-4o') }}">
-                    </div>
                 </div>
                 
                 <div class="d-grid">
@@ -176,7 +149,79 @@
         </div>
     </div>
     
+    <!-- 模型设置弹窗 -->
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="settingsModalLabel">模型设置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- 模型提供商选择 -->
+                    <div class="mb-3">
+                        <label class="form-label">选择模型提供商</label>
+                        <div class="d-flex">
+                            <div class="form-check me-4">
+                                <input class="form-check-input provider-radio" type="radio" name="provider_select" id="provider_volcano_select" value="volcano" {% if model_provider != 'openai' %}checked{% endif %}>
+                                <label class="form-check-label" for="provider_volcano_select">
+                                    火山引擎
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input provider-radio" type="radio" name="provider_select" id="provider_openai_select" value="openai" {% if model_provider == 'openai' %}checked{% endif %}>
+                                <label class="form-check-label" for="provider_openai_select">
+                                    OpenAI
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- API密钥输入 -->
+                    <div class="mb-3">
+                        <label for="api_key_input" class="form-label">API密钥（可选）</label>
+                        <input type="password" class="form-control" id="api_key_input" placeholder="API密钥">
+                        <div class="form-text">如不填写，使用系统默认密钥</div>
+                    </div>
+                    
+                    <!-- 火山引擎设置 -->
+                    <div id="volcano_settings_input" {% if model_provider == 'openai' %}style="display:none;"{% endif %}>
+                        <div class="mb-3">
+                            <label for="volcano_base_url_input" class="form-label">火山引擎基础URL（可选）</label>
+                            <input type="text" class="form-control" id="volcano_base_url_input" placeholder="https://ark.cn-beijing.volces.com/api/v3" value="{{ volcano_base_url|default('https://ark.cn-beijing.volces.com/api/v3') }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="volcano_model_input" class="form-label">火山引擎模型（可选）</label>
+                            <input type="text" class="form-control" id="volcano_model_input" placeholder="ep-20250317192842-2mhtn" value="{{ volcano_model|default('ep-20250317192842-2mhtn') }}">
+                        </div>
+                    </div>
+                    
+                    <!-- OpenAI设置 -->
+                    <div id="openai_settings_input" {% if model_provider != 'openai' %}style="display:none;"{% endif %}>
+                        <div class="mb-3">
+                            <label for="openai_base_url_input" class="form-label">OpenAI基础URL（可选）</label>
+                            <input type="text" class="form-control" id="openai_base_url_input" placeholder="https://api.openai.com/v1" value="{{ openai_base_url|default('https://api.openai.com/v1') }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="openai_model_input" class="form-label">OpenAI模型</label>
+                            <input type="text" class="form-control" id="openai_model_input" placeholder="gpt-4o" value="{{ openai_model|default('gpt-4o') }}">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="saveSettings">保存设置</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 在页面底部引入Bootstrap JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css"></script>
+    
     <script>
+        // 温度滑块处理
         const temperatureSlider = document.getElementById('temperature');
         const temperatureValue = document.getElementById('temperature-value');
         
@@ -184,16 +229,39 @@
             temperatureValue.textContent = this.value;
         });
 
-        document.querySelectorAll('input[name="model_provider"]').forEach(radio => {
+        // 模型提供商切换
+        document.querySelectorAll('.provider-radio').forEach(radio => {
             radio.addEventListener('change', function() {
                 if (this.value === 'volcano') {
-                    document.getElementById('volcano_settings').style.display = 'block';
-                    document.getElementById('openai_settings').style.display = 'none';
+                    document.getElementById('volcano_settings_input').style.display = 'block';
+                    document.getElementById('openai_settings_input').style.display = 'none';
                 } else {
-                    document.getElementById('volcano_settings').style.display = 'none';
-                    document.getElementById('openai_settings').style.display = 'block';
+                    document.getElementById('volcano_settings_input').style.display = 'none';
+                    document.getElementById('openai_settings_input').style.display = 'block';
                 }
             });
+        });
+        
+        // 保存设置到隐藏字段
+        document.getElementById('saveSettings').addEventListener('click', function() {
+            // 获取当前选择的提供商
+            const selectedProvider = document.querySelector('input[name="provider_select"]:checked').value;
+            document.getElementById('model_provider').value = selectedProvider;
+            
+            // 保存API密钥
+            document.getElementById('api_key').value = document.getElementById('api_key_input').value;
+            
+            // 保存其他设置
+            document.getElementById('volcano_base_url').value = document.getElementById('volcano_base_url_input').value;
+            document.getElementById('volcano_model').value = document.getElementById('volcano_model_input').value;
+            document.getElementById('openai_base_url').value = document.getElementById('openai_base_url_input').value;
+            document.getElementById('openai_model').value = document.getElementById('openai_model_input').value;
+            
+            // 关闭弹窗
+            bootstrap.Modal.getInstance(document.getElementById('settingsModal')).hide();
+            
+            // 显示保存成功提示
+            alert('设置已保存！');
         });
     </script>
 </body>
