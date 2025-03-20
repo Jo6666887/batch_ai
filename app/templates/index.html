@@ -25,6 +25,12 @@
             text-align: center;
             margin-bottom: 2rem;
         }
+        .site-header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: white;
+            position: relative;
+        }
         .form-label {
             font-weight: 500;
         }
@@ -76,20 +82,31 @@
         }
         .settings-btn {
             position: absolute;
-            top: 15px;
-            right: 15px;
+            top: 0;
+            right: 0;
             z-index: 100;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- 网站标题 -->
+        <div class="site-header">
+            <h1 class="text-4xl font-bold">BATCH-AI @ZJW</h1>
+            <h2 class="text-3xl font-bold mt-2">批量问题处理系统</h2>
+            
+            <!-- 模型设置按钮移到右上角 -->
+            <button type="button" class="btn btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                <i class="bi bi-gear-fill"></i> 模型设置
+            </button>
+        </div>
+        
         <div class="row">
             <!-- 左侧卡片：生成问题数据集 -->
             <div class="col-md-5 mb-4">
                 <div class="form-container">
                     <div class="header">
-                        <h1 class="text-2xl font-bold text-gray-800">生成问题数据集</h1>
+                        <h1 class="text-xl font-bold text-gray-800">生成问题数据集</h1>
                         <p class="lead text-gray-600 mt-2">根据提示词生成AI问题</p>
                     </div>
                     
@@ -112,6 +129,7 @@
                             <div class="form-text">设置生成问题的AI助手的角色</div>
                         </div>
                         
+                        <!-- 添加回温度滑块 -->
                         <div class="mb-4">
                             <label class="form-label">生成创造性 (Temperature)</label>
                             <div class="temperature-slider">
@@ -137,13 +155,8 @@
             <!-- 右侧卡片：批量回答问题 -->
             <div class="col-md-7">
                 <div class="form-container">
-                    <div class="header position-relative">
-                        <!-- 设置按钮 -->
-                        <button type="button" class="btn btn-sm btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
-                            <i class="bi bi-gear-fill"></i> 模型设置
-                        </button>
-                        <h1 class="text-3xl font-bold text-gray-800">BATCH-AI @ZJW</h1>
-                        <h1 class="text-3xl font-bold text-gray-800">批量问题处理系统</h1>
+                    <div class="header">
+                        <h1 class="text-xl font-bold text-gray-800">批量问题处理</h1>
                         <p class="lead text-gray-600 mt-2">上传Excel文件，使用AI批量回答问题</p>
                     </div>
                     
@@ -163,9 +176,9 @@
                         <input type="hidden" id="openai_model" name="openai_model" value="{{ openai_model|default('gpt-4o') }}">
                         
                         <div class="mb-4">
-                            <label for="file" class="form-label">上传Excel文件</label>
-                            <input class="form-control" type="file" id="file" name="file" accept=".xlsx,.xls" required>
-                            <div class="form-text">请上传包含一列问题的Excel文件</div>
+                            <label for="file" class="form-label">上传问题文件</label>
+                            <input class="form-control" type="file" id="file" name="file" accept=".xlsx,.xls,.json,.jsonl" required>
+                            <div class="form-text">请上传包含一列问题的Excel文件(.xlsx,.xls)或JSON文件(.json,.jsonl)</div>
                         </div>
                         
                         <div class="mb-4">
@@ -174,6 +187,7 @@
                             <div class="form-text">设置AI助手的行为和角色</div>
                         </div>
 
+                        <!-- 添加回温度滑块 -->
                         <div class="mb-4">
                             <label class="form-label">模型创造性 (Temperature)</label>
                             <div class="temperature-slider">
