@@ -14,6 +14,7 @@ import openai  # 添加OpenAI库
 import httpx
 import asyncio
 from functools import partial
+import re
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -464,25 +465,60 @@ def upload_file():
     if file.filename == '':
         return redirect(request.url)
     
+    # 生成任务ID
+    task_id = str(int(time.time()))
+    
     if file:
-        # 生成任务ID
-        task_id = str(int(time.time()))
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{task_id}_{filename}")
         file.save(filepath)
         
-        # 读取Excel文件
+        # 读取文件 - 支持Excel文件或JSON格式的生成问题
         try:
-            logger.info(f"读取Excel文件: {filepath}")
-            df = pd.read_excel(filepath)
-            logger.info(f"Excel文件形状: {df.shape}")
+            logger.info(f"读取文件: {filepath}")
             
-            # 获取所有非空问题
             questions = []
-            for i, value in enumerate(df.iloc[:, 0]):
-                if pd.notna(value) and str(value).strip():
-                    questions.append(str(value).strip())
-                    logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
+            
+            # 根据文件类型处理
+            if filename.endswith(('.xlsx', '.xls')):
+                # 处理Excel文件
+                df = pd.read_excel(filepath)
+                logger.info(f"Excel文件形状: {df.shape}")
+                
+                # 获取所有非空问题
+                for i, value in enumerate(df.iloc[:, 0]):
+                    if pd.notna(value) and str(value).strip():
+                        questions.append(str(value).strip())
+                        logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
+            
+            elif filename.endswith(('.json', '.jsonl')):
+                # 处理JSON文件（从生成问题保存的）
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    if filename.endswith('.jsonl'):
+                        # 处理JSONL格式
+                        questions = []
+                        for line in f:
+                            item = json.loads(line.strip())
+                            if isinstance(item, str):
+                                questions.append(item)
+                            elif isinstance(item, dict) and 'question' in item:
+                                questions.append(item['question'])
+                    else:
+                        # 处理JSON格式
+                        data = json.load(f)
+                        if isinstance(data, list):
+                            if all(isinstance(item, str) for item in data):
+                                # 直接使用字符串列表
+                                questions = data
+                            elif all(isinstance(item, dict) for item in data) and 'question' in data[0]:
+                                # 使用对象列表，提取question字段
+                                questions = [item['question'] for item in data if 'question' in item]
+                
+                logger.info(f"从JSON文件加载了{len(questions)}个问题")
+            
+            else:
+                logger.error(f"不支持的文件类型: {filename}")
+                return "不支持的文件类型，请上传Excel或JSON文件", 400
             
             logger.info(f"共找到 {len(questions)} 个有效问题")
             
@@ -728,6 +764,335 @@ def control_task(task_id):
         return jsonify({'status': 'resumed'})
     else:
         return jsonify({'error': '无效的操作'}), 400
+
+@app.route('/generate_questions', methods=['POST'])
+def generate_questions():
+    """生成问题数据集"""
+    generation_prompt = request.form.get('generation_prompt', '')
+    num_questions = int(request.form.get('num_questions', 10))
+    gen_system_prompt = request.form.get('gen_system_prompt', '你是专业的问题生成器，善于根据主题创建有深度、多样化的问题。')
+    gen_temperature = float(request.form.get('gen_temperature', 0.8))
+    api_key = request.form.get('api_key', os.getenv('ARK_API_KEY', ''))
+    
+    # 限制生成数量，避免过大请求
+    num_questions = min(max(1, num_questions), 100)
+    
+    # 使用默认模型提供商
+    model_provider = "volcano"
+    base_url = "https://ark.cn-beijing.volces.com/api/v3"
+    model_name = "ep-20250317192842-2mhtn"
+    
+    # 创建生成任务
+    task_id = f"gen_{int(time.time())}"
+    
+    # 构建提示词
+    prompt = f"""根据下面的要求生成{num_questions}个不同的问题。每个问题应该独特、清晰且富有价值。
+    
+要求：{generation_prompt}
+
+请按以下格式返回问题列表：
+1. 第一个问题
+2. 第二个问题
+...
+
+不要包含答案或解释，只需生成问题列表。"""
+    
+    # 创建任务状态
+    current_tasks[task_id] = {
+        'status': 'starting',
+        'type': 'question_generation',  # 标记此任务为问题生成任务
+        'generation_prompt': generation_prompt,
+        'num_questions': num_questions,
+        'gen_system_prompt': gen_system_prompt,
+        'gen_temperature': gen_temperature,
+        'model_provider': model_provider,
+        'base_url': base_url,
+        'model_name': model_name,
+        'api_key': api_key,
+        'total': num_questions,
+        'completed': 0,
+        'results': [],
+        'paused': False,
+        'last_update': time.time()
+    }
+    
+    # 启动后台处理线程
+    thread = threading.Thread(
+        target=process_question_generation,
+        args=(task_id, prompt, gen_system_prompt, api_key, gen_temperature, model_provider, base_url, model_name)
+    )
+    thread.daemon = True
+    thread.start()
+    
+    return redirect(url_for('generation_status', task_id=task_id))
+
+@app.route('/generation/<task_id>')
+def generation_status(task_id):
+    """展示问题生成任务的状态和结果"""
+    if task_id not in current_tasks or current_tasks[task_id].get('type') != 'question_generation':
+        # 尝试从保存的文件中恢复任务状态
+        result_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
+        if os.path.exists(result_file):
+            with open(result_file, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            # 尝试获取任务的元数据
+            metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+            gen_system_prompt = ""
+            gen_temperature = 0.8
+            generation_prompt = ""
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        gen_system_prompt = metadata.get('gen_system_prompt', '')
+                        gen_temperature = metadata.get('gen_temperature', 0.8)
+                        generation_prompt = metadata.get('generation_prompt', '')
+                except Exception as e:
+                    logger.error(f"读取元数据文件出错: {str(e)}")
+            
+            current_tasks[task_id] = {
+                'status': 'completed',
+                'type': 'question_generation',
+                'total': len(results),
+                'completed': len(results),
+                'results': results,
+                'paused': False,
+                'last_update': time.time(),
+                'gen_system_prompt': gen_system_prompt,
+                'gen_temperature': gen_temperature,
+                'generation_prompt': generation_prompt
+            }
+            logger.info(f"从文件恢复生成任务 {task_id}，共 {len(results)} 个结果")
+        else:
+            logger.warning(f"未找到生成任务 {task_id}")
+            return "未找到生成任务", 404
+    
+    return render_template('generation.html', task_id=task_id)
+
+@app.route('/api/generation/<task_id>')
+def get_generation_status(task_id):
+    """获取问题生成任务的状态和结果"""
+    if task_id not in current_tasks or current_tasks[task_id].get('type') != 'question_generation':
+        result_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
+        if os.path.exists(result_file):
+            with open(result_file, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            # 尝试获取元数据
+            metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+            gen_system_prompt = ""
+            gen_temperature = 0.8
+            generation_prompt = ""
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        gen_system_prompt = metadata.get('gen_system_prompt', '')
+                        gen_temperature = metadata.get('gen_temperature', 0.8)
+                        generation_prompt = metadata.get('generation_prompt', '')
+                except Exception as e:
+                    logger.error(f"读取元数据文件出错: {str(e)}")
+            
+            logger.info(f"API请求：生成任务 {task_id} 从文件加载，包含 {len(results)} 个结果")
+            return jsonify({
+                'status': 'completed',
+                'total': len(results),
+                'completed': len(results),
+                'results': results,
+                'generation_prompt': generation_prompt,
+                'gen_system_prompt': gen_system_prompt,
+                'gen_temperature': gen_temperature,
+                'last_update': time.time()
+            })
+        logger.warning(f"API请求：未找到生成任务 {task_id}")
+        return jsonify({'error': '未找到生成任务'}), 404
+    
+    task = current_tasks[task_id]
+    logger.info(f"API请求：获取生成任务 {task_id} 状态，{task['completed']}/{task['total']}")
+    return jsonify({
+        'status': task['status'],
+        'total': task['total'],
+        'completed': task['completed'],
+        'results': task['results'],
+        'generation_prompt': task.get('generation_prompt', ''),
+        'gen_system_prompt': task.get('gen_system_prompt', ''),
+        'gen_temperature': task.get('gen_temperature', 0.8),
+        'last_update': task.get('last_update', time.time())
+    })
+
+@app.route('/download/generation/<task_id>')
+def download_generated_questions(task_id):
+    """下载生成的问题"""
+    from flask import Response, request
+    
+    result_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
+    if not os.path.exists(result_file):
+        logger.warning(f"下载请求：未找到生成任务 {task_id} 的结果文件")
+        return "结果文件不存在", 404
+    
+    with open(result_file, 'r', encoding='utf-8') as f:
+        results = json.load(f)
+    
+    # 获取请求的格式
+    format_type = request.args.get('format', 'excel')
+    logger.info(f"下载请求：生成任务 {task_id} 的{format_type}文件，包含 {len(results)} 个结果")
+    
+    if format_type == 'excel':
+        # 创建Excel文件
+        import io
+        import pandas as pd
+        from openpyxl import Workbook
+        
+        output = io.BytesIO()
+        df = pd.DataFrame(results, columns=['question'])
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='生成的问题')
+        
+        output.seek(0)
+        
+        # 返回Excel响应
+        return Response(
+            output.getvalue(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-disposition": f"attachment; filename=generated_questions_{task_id}.xlsx"}
+        )
+    elif format_type == 'text':
+        # 创建文本格式
+        text_data = "\n".join([f"{i+1}. {q}" for i, q in enumerate(results)])
+        
+        # 返回文本响应
+        return Response(
+            text_data,
+            mimetype="text/plain",
+            headers={"Content-disposition": f"attachment; filename=generated_questions_{task_id}.txt"}
+        )
+    else:
+        return "不支持的格式类型", 400
+
+def process_question_generation(task_id, prompt, system_prompt, api_key, temperature, model_provider="volcano", base_url=None, model_name=None):
+    """后台处理问题生成的函数"""
+    logger.info(f"开始生成问题任务 {task_id}，使用温度参数: {temperature}，模型提供商: {model_provider}")
+    results = []
+    current_tasks[task_id]['status'] = 'processing'
+    current_tasks[task_id]['last_update'] = time.time()
+    
+    # 使用实际的API密钥
+    actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
+    
+    # 根据提供商初始化客户端
+    if model_provider == "volcano":
+        # 火山引擎客户端初始化
+        actual_base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
+        actual_model = model_name if model_name else "ep-20250317192842-2mhtn"
+        
+        client = Ark(
+            base_url=actual_base_url,
+            api_key=actual_api_key
+        )
+    else:
+        # OpenAI客户端初始化
+        actual_base_url = base_url if base_url else "https://api.openai.com/v1"
+        actual_model = model_name if model_name else "gpt-4o"
+        
+        client = openai.OpenAI(
+            api_key=actual_api_key,
+            base_url=actual_base_url
+        )
+    
+    try:
+        logger.info(f"发送生成问题请求，温度: {temperature}")
+        
+        # 发送请求
+        if model_provider == "volcano":
+            response = client.chat.completions.create(
+                model=actual_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=float(temperature)
+            )
+            
+            generated_text = response.choices[0].message.content
+        else:
+            response = client.chat.completions.create(
+                model=actual_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=float(temperature)
+            )
+            
+            generated_text = response.choices[0].message.content
+        
+        logger.info(f"问题生成成功，处理结果文本")
+        
+        # 处理生成的文本，提取问题
+        questions = []
+        lines = generated_text.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            # 匹配格式为"1. 问题"或"1.问题"或"1、问题"的行
+            if re.match(r'^\d+[\.\、] .+', line) or re.match(r'^\d+\..+', line):
+                # 去除序号和点，保留问题内容
+                question = re.sub(r'^\d+[\.\、]\s*', '', line).strip()
+                if question:
+                    questions.append(question)
+        
+        # 如果没有匹配到正确格式的问题，尝试直接按行分割
+        if not questions:
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('---'):
+                    questions.append(line)
+        
+        # 更新结果
+        results = questions[:current_tasks[task_id]['num_questions']]
+        
+        current_tasks[task_id]['completed'] = len(results)
+        current_tasks[task_id]['results'] = results
+        current_tasks[task_id]['status'] = 'completed'
+        current_tasks[task_id]['last_update'] = time.time()
+        
+        # 保存结果
+        save_generation_results(task_id, results)
+        
+        logger.info(f"生成问题任务 {task_id} 完成，共生成 {len(results)} 个问题")
+        
+    except Exception as e:
+        error_msg = f"生成问题时出错: {str(e)}"
+        logger.error(error_msg)
+        current_tasks[task_id]['status'] = 'failed'
+        current_tasks[task_id]['error'] = error_msg
+        current_tasks[task_id]['last_update'] = time.time()
+    
+    return results
+
+def save_generation_results(task_id, results):
+    """保存问题生成结果到文件"""
+    filename = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    
+    # 保存任务元数据
+    if task_id in current_tasks:
+        metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+        metadata = {
+            'generation_prompt': current_tasks[task_id].get('generation_prompt', ''),
+            'gen_system_prompt': current_tasks[task_id].get('gen_system_prompt', ''),
+            'gen_temperature': current_tasks[task_id].get('gen_temperature', 0.8),
+            'model_provider': current_tasks[task_id].get('model_provider', 'volcano'),
+            'model_name': current_tasks[task_id].get('model_name', ''),
+            'timestamp': time.time()
+        }
+        try:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存生成任务元数据出错: {str(e)}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)

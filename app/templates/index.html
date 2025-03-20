@@ -84,67 +84,121 @@
 </head>
 <body>
     <div class="container">
-        <div class="form-container">
-            <div class="header position-relative">
-                <!-- 设置按钮 -->
-                <button type="button" class="btn btn-sm btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
-                    <i class="bi bi-gear-fill"></i> 模型设置
-                </button>
-                <h1 class="text-3xl font-bold text-gray-800">BATCH-AI @ZJW</h1>
-                <h1 class="text-3xl font-bold text-gray-800">批量问题处理系统</h1>
-                <p class="lead text-gray-600 mt-2">上传Excel文件，使用AI批量回答问题</p>
-            </div>
-            
-            {% if last_task_id %}
-            <div class="last-task-info">
-                <p><strong>您有一个暂停的任务！</strong> 您可以<a href="/task/{{ last_task_id }}">返回该任务</a>继续处理，或开始新任务。</p>
-            </div>
-            {% endif %}
-            
-            <form action="/upload" method="post" enctype="multipart/form-data">
-                <!-- 隐藏字段用于保存当前选择的设置 -->
-                <input type="hidden" id="model_provider" name="model_provider" value="{{ model_provider|default('volcano') }}">
-                <input type="hidden" id="api_key" name="api_key" value="">
-                <input type="hidden" id="volcano_base_url" name="volcano_base_url" value="{{ volcano_base_url|default('https://ark.cn-beijing.volces.com/api/v3') }}">
-                <input type="hidden" id="volcano_model" name="volcano_model" value="{{ volcano_model|default('ep-20250317192842-2mhtn') }}">
-                <input type="hidden" id="openai_base_url" name="openai_base_url" value="{{ openai_base_url|default('https://api.openai.com/v1') }}">
-                <input type="hidden" id="openai_model" name="openai_model" value="{{ openai_model|default('gpt-4o') }}">
-                
-                <div class="mb-4">
-                    <label for="file" class="form-label">上传Excel文件</label>
-                    <input class="form-control" type="file" id="file" name="file" accept=".xlsx,.xls" required>
-                    <div class="form-text">请上传包含一列问题的Excel文件</div>
-                </div>
-                
-                <div class="mb-4">
-                    <label for="system_prompt" class="form-label">系统提示词</label>
-                    <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">{{ system_prompt|default('你是人工智能助手，能够提供专业、准确的回答。') }}</textarea>
-                    <div class="form-text">设置AI助手的行为和角色</div>
-                </div>
-
-                <div class="mb-4">
-                    <label class="form-label">模型创造性 (Temperature)</label>
-                    <div class="temperature-slider">
-                        <input type="range" id="temperature" name="temperature" min="0" max="1" step="0.1" value="{{ temperature|default(0.7) }}">
-                        <div class="temperature-labels">
-                            <span>精确</span>
-                            <span>平衡</span>
-                            <span>创造性</span>
+        <div class="row">
+            <!-- 左侧卡片：生成问题数据集 -->
+            <div class="col-md-5 mb-4">
+                <div class="form-container">
+                    <div class="header">
+                        <h1 class="text-2xl font-bold text-gray-800">生成问题数据集</h1>
+                        <p class="lead text-gray-600 mt-2">根据提示词生成AI问题</p>
+                    </div>
+                    
+                    <form action="/generate_questions" method="post">
+                        <div class="mb-4">
+                            <label for="generation_prompt" class="form-label">生成提示词</label>
+                            <textarea class="form-control" id="generation_prompt" name="generation_prompt" rows="4" placeholder="请输入生成问题的提示词，例如：'生成关于人工智能技术的问题'">{{ generation_prompt|default('') }}</textarea>
+                            <div class="form-text">指导AI生成什么类型的问题</div>
                         </div>
-                    </div>
-                    <div class="temperature-display">
-                        当前值: <span id="temperature-value">{{ temperature|default(0.7) }}</span>
-                    </div>
-                    <div class="form-text">较低的值使回答更加确定和一致，较高的值使回答更加多样化和创造性</div>
+                        
+                        <div class="mb-4">
+                            <label for="num_questions" class="form-label">生成问题数量</label>
+                            <input type="number" class="form-control" id="num_questions" name="num_questions" min="1" max="100" value="{{ num_questions|default(10) }}">
+                            <div class="form-text">建议数量：1-100，数量越多生成时间越长</div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label for="gen_system_prompt" class="form-label">系统提示词（可选）</label>
+                            <textarea class="form-control" id="gen_system_prompt" name="gen_system_prompt" rows="3">{{ gen_system_prompt|default('你是专业的问题生成器，善于根据主题创建有深度、多样化的问题。') }}</textarea>
+                            <div class="form-text">设置生成问题的AI助手的角色</div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label class="form-label">生成创造性 (Temperature)</label>
+                            <div class="temperature-slider">
+                                <input type="range" id="gen_temperature" name="gen_temperature" min="0" max="1" step="0.1" value="{{ gen_temperature|default(0.8) }}">
+                                <div class="temperature-labels">
+                                    <span>常规</span>
+                                    <span>平衡</span>
+                                    <span>创新</span>
+                                </div>
+                            </div>
+                            <div class="temperature-display">
+                                当前值: <span id="gen-temperature-value">{{ gen_temperature|default(0.8) }}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-success btn-lg bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">生成问题集</button>
+                        </div>
+                    </form>
                 </div>
-                
-                <div class="d-grid">
-                    <button type="submit" class="btn btn-primary btn-lg bg-gradient-to-r from-blue-500 to-green-500 hover:from-blue-600 hover:to-green-600">开始处理</button>
-                </div>
-            </form>
+            </div>
             
-            <div class="mt-4 text-center">
-                <p class="form-text">上传后系统将自动处理问题并展示结果，过程中生成的内容会自动保存</p>
+            <!-- 右侧卡片：批量回答问题 -->
+            <div class="col-md-7">
+                <div class="form-container">
+                    <div class="header position-relative">
+                        <!-- 设置按钮 -->
+                        <button type="button" class="btn btn-sm btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                            <i class="bi bi-gear-fill"></i> 模型设置
+                        </button>
+                        <h1 class="text-3xl font-bold text-gray-800">BATCH-AI @ZJW</h1>
+                        <h1 class="text-3xl font-bold text-gray-800">批量问题处理系统</h1>
+                        <p class="lead text-gray-600 mt-2">上传Excel文件，使用AI批量回答问题</p>
+                    </div>
+                    
+                    {% if last_task_id %}
+                    <div class="last-task-info">
+                        <p><strong>您有一个暂停的任务！</strong> 您可以<a href="/task/{{ last_task_id }}">返回该任务</a>继续处理，或开始新任务。</p>
+                    </div>
+                    {% endif %}
+                    
+                    <form action="/upload" method="post" enctype="multipart/form-data">
+                        <!-- 隐藏字段用于保存当前选择的设置 -->
+                        <input type="hidden" id="model_provider" name="model_provider" value="{{ model_provider|default('volcano') }}">
+                        <input type="hidden" id="api_key" name="api_key" value="">
+                        <input type="hidden" id="volcano_base_url" name="volcano_base_url" value="{{ volcano_base_url|default('https://ark.cn-beijing.volces.com/api/v3') }}">
+                        <input type="hidden" id="volcano_model" name="volcano_model" value="{{ volcano_model|default('ep-20250317192842-2mhtn') }}">
+                        <input type="hidden" id="openai_base_url" name="openai_base_url" value="{{ openai_base_url|default('https://api.openai.com/v1') }}">
+                        <input type="hidden" id="openai_model" name="openai_model" value="{{ openai_model|default('gpt-4o') }}">
+                        
+                        <div class="mb-4">
+                            <label for="file" class="form-label">上传Excel文件</label>
+                            <input class="form-control" type="file" id="file" name="file" accept=".xlsx,.xls" required>
+                            <div class="form-text">请上传包含一列问题的Excel文件</div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label for="system_prompt" class="form-label">系统提示词</label>
+                            <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">{{ system_prompt|default('你是人工智能助手，能够提供专业、准确的回答。') }}</textarea>
+                            <div class="form-text">设置AI助手的行为和角色</div>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label">模型创造性 (Temperature)</label>
+                            <div class="temperature-slider">
+                                <input type="range" id="temperature" name="temperature" min="0" max="1" step="0.1" value="{{ temperature|default(0.7) }}">
+                                <div class="temperature-labels">
+                                    <span>精确</span>
+                                    <span>平衡</span>
+                                    <span>创造性</span>
+                                </div>
+                            </div>
+                            <div class="temperature-display">
+                                当前值: <span id="temperature-value">{{ temperature|default(0.7) }}</span>
+                            </div>
+                            <div class="form-text">较低的值使回答更加确定和一致，较高的值使回答更加多样化和创造性</div>
+                        </div>
+                        
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg bg-gradient-to-r from-blue-500 to-green-500 hover:from-blue-600 hover:to-green-600">开始处理</button>
+                        </div>
+                    </form>
+                    
+                    <div class="mt-4 text-center">
+                        <p class="form-text">上传后系统将自动处理问题并展示结果，过程中生成的内容会自动保存</p>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -227,6 +281,14 @@
         
         temperatureSlider.addEventListener('input', function() {
             temperatureValue.textContent = this.value;
+        });
+        
+        // 生成问题温度滑块处理
+        const genTemperatureSlider = document.getElementById('gen_temperature');
+        const genTemperatureValue = document.getElementById('gen-temperature-value');
+        
+        genTemperatureSlider.addEventListener('input', function() {
+            genTemperatureValue.textContent = this.value;
         });
 
         // 模型提供商切换
