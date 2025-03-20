@@ -119,10 +119,50 @@
                     <div class="form-text">较低的值使回答更加确定和一致，较高的值使回答更加多样化和创造性</div>
                 </div>
                 
-                <div class="mb-4">
-                    <label for="api_key" class="form-label">API密钥 (可选)</label>
-                    <input type="text" class="form-control" id="api_key" name="api_key" placeholder="如不填写将使用系统默认API密钥">
-                    <div class="form-text">如有自己的API密钥，可以在此处填写</div>
+                <div class="mb-3">
+                    <label class="form-label">选择模型提供商</label>
+                    <div class="d-flex">
+                        <div class="form-check me-4">
+                            <input class="form-check-input" type="radio" name="model_provider" id="provider_volcano" value="volcano" {% if model_provider != 'openai' %}checked{% endif %}>
+                            <label class="form-check-label" for="provider_volcano">
+                                火山引擎
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="model_provider" id="provider_openai" value="openai" {% if model_provider == 'openai' %}checked{% endif %}>
+                            <label class="form-check-label" for="provider_openai">
+                                OpenAI
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="api_key" class="form-label">API密钥（可选）</label>
+                    <input type="password" class="form-control" id="api_key" name="api_key" placeholder="API密钥">
+                    <div class="form-text" id="api_key_help">如不填写，使用系统默认密钥</div>
+                </div>
+                
+                <div id="volcano_settings" {% if model_provider == 'openai' %}style="display:none;"{% endif %}>
+                    <div class="mb-3">
+                        <label for="volcano_base_url" class="form-label">火山引擎基础URL（可选）</label>
+                        <input type="text" class="form-control" id="volcano_base_url" name="volcano_base_url" placeholder="https://ark.cn-beijing.volces.com/api/v3" value="{{ volcano_base_url|default('https://ark.cn-beijing.volces.com/api/v3') }}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="volcano_model" class="form-label">火山引擎模型（可选）</label>
+                        <input type="text" class="form-control" id="volcano_model" name="volcano_model" placeholder="ep-20250317192842-2mhtn" value="{{ volcano_model|default('ep-20250317192842-2mhtn') }}">
+                    </div>
+                </div>
+                
+                <div id="openai_settings" {% if model_provider != 'openai' %}style="display:none;"{% endif %}>
+                    <div class="mb-3">
+                        <label for="openai_base_url" class="form-label">OpenAI基础URL（可选）</label>
+                        <input type="text" class="form-control" id="openai_base_url" name="openai_base_url" placeholder="https://api.openai.com/v1" value="{{ openai_base_url|default('https://api.openai.com/v1') }}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="openai_model" class="form-label">OpenAI模型</label>
+                        <input type="text" class="form-control" id="openai_model" name="openai_model" placeholder="gpt-4o" value="{{ openai_model|default('gpt-4o') }}">
+                    </div>
                 </div>
                 
                 <div class="d-grid">
@@ -142,6 +182,18 @@
         
         temperatureSlider.addEventListener('input', function() {
             temperatureValue.textContent = this.value;
+        });
+
+        document.querySelectorAll('input[name="model_provider"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                if (this.value === 'volcano') {
+                    document.getElementById('volcano_settings').style.display = 'block';
+                    document.getElementById('openai_settings').style.display = 'none';
+                } else {
+                    document.getElementById('volcano_settings').style.display = 'none';
+                    document.getElementById('openai_settings').style.display = 'block';
+                }
+            });
         });
     </script>
 </body>

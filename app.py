@@ -9,6 +9,7 @@ import time
 from dotenv import load_dotenv
 import logging
 from volcenginesdkarkruntime import Ark
+import openai  # 添加OpenAI库
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -31,9 +32,9 @@ os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
 # 全局变量用于存储当前正在处理的任务
 current_tasks = {}
 
-def process_questions(task_id, questions, system_prompt, api_key, temperature):
+def process_questions(task_id, questions, system_prompt, api_key, temperature, model_provider="volcano", base_url=None, model_name=None):
     """后台处理问题的函数"""
-    logger.info(f"开始处理任务 {task_id}，使用温度参数: {temperature}")
+    logger.info(f"开始处理任务 {task_id}，使用温度参数: {temperature}，模型提供商: {model_provider}")
     results = []
     current_tasks[task_id]['status'] = 'processing'
     current_tasks[task_id]['total'] = len(questions)
@@ -46,11 +47,50 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature):
     # 使用实际的API密钥
     actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
     
-    # 初始化Ark客户端
-    client = Ark(
-        base_url="https://ark.cn-beijing.volces.com/api/v3",
-        api_key=actual_api_key
-    )
+    # 根据提供商初始化客户端
+    if model_provider == "volcano":
+        # 火山引擎客户端初始化
+        actual_base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
+        actual_model = model_name if model_name else "ep-20250317192842-2mhtn"
+        logger.info(f"初始化火山引擎客户端: base_url={actual_base_url}, model={actual_model}")
+        client = Ark(
+            base_url=actual_base_url,
+            api_key=actual_api_key
+        )
+    else:
+        # OpenAI客户端初始化
+        actual_base_url = base_url if base_url else "https://api.openai.com/v1"
+        actual_model = model_name if model_name else "gpt-4o"
+        logger.info(f"初始化OpenAI客户端: base_url={actual_base_url}, model={actual_model}")
+        
+        # 打印用于调试的信息，不包含密钥
+        logger.info(f"OpenAI配置: URL={actual_base_url}, 模型={actual_model}")
+        
+        try:
+            # 设置HTTP超时，增加兼容性
+            import httpx
+            # 尝试为OpenAI库创建自定义的HTTP客户端
+            http_client = httpx.Client(
+                timeout=httpx.Timeout(60.0, connect=10.0),
+                follow_redirects=True
+            )
+            
+            # 初始化OpenAI客户端
+            client = openai.OpenAI(
+                api_key=actual_api_key,
+                base_url=actual_base_url,
+                http_client=http_client,
+                max_retries=3  # 添加重试次数
+            )
+            logger.info("OpenAI客户端初始化成功")
+        except Exception as e:
+            # 如果高级配置失败，使用基本配置
+            logger.warning(f"使用高级配置初始化OpenAI客户端失败: {str(e)}，尝试使用基本配置")
+            client = openai.OpenAI(
+                api_key=actual_api_key,
+                base_url=actual_base_url
+            )
+            logger.info("使用基本配置初始化OpenAI客户端成功")
     
     i = 0
     while i < len(questions):
@@ -93,16 +133,36 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature):
             # 使用流式API
             answer = ""
             try:
-                # 发送流式请求
-                stream = client.chat.completions.create(
-                    model="ep-20250317192842-2mhtn",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": question}
-                    ],
-                    stream=True,
-                    temperature=float(temperature)  # 确保temperature是float类型
-                )
+                # 根据不同的模型提供商发送请求
+                if model_provider == "volcano":
+                    # 火山引擎API
+                    logger.info(f"使用火山引擎API调用模型: {actual_model}")
+                    stream = client.chat.completions.create(
+                        model=actual_model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": question}
+                        ],
+                        stream=True,
+                        temperature=float(temperature)
+                    )
+                else:
+                    # OpenAI API
+                    logger.info(f"使用OpenAI API调用模型: {actual_model}, 基础URL: {actual_base_url}")
+                    try:
+                        stream = client.chat.completions.create(
+                            model=actual_model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": question}
+                            ],
+                            stream=True,
+                            temperature=float(temperature)
+                        )
+                        logger.info("OpenAI API请求成功发送")
+                    except Exception as e:
+                        logger.error(f"OpenAI API请求失败: {str(e)}")
+                        raise
                 
                 # 实时收集流式响应
                 for chunk in stream:
@@ -130,35 +190,77 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature):
                         
                         # 停止处理当前流
                         break
-                        
-                    if not chunk.choices:
-                        continue
-                    if chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        answer += chunk.choices[0].delta.content
-                        
-                        # 每次有新内容时更新当前任务状态
-                        result = {
-                            "question": question,
-                            "answer": answer,
-                            "is_streaming": True
-                        }
-                        
-                        # 更新当前结果
-                        if len(results) > i:
-                            results[i] = result
-                        else:
-                            results.append(result)
+                    
+                    # 根据不同API处理响应流
+                    if model_provider == "volcano":
+                        if not chunk.choices:
+                            continue
+                        if chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            answer += chunk.choices[0].delta.content
+                    else:
+                        # OpenAI API处理方式
+                        try:
+                            if not chunk.choices:
+                                logger.debug("OpenAI响应chunk没有choices")
+                                continue
                             
-                        # 更新任务状态
-                        current_tasks[task_id]['results'] = results.copy()
-                        current_tasks[task_id]['last_update'] = time.time()
-                        
-                        # 每积累一定字符保存一次中间结果
-                        if len(answer) % 50 == 0:
+                            # 记录OpenAI响应的结构
+                            if i == 0 and len(answer) < 50:
+                                logger.info(f"OpenAI响应chunk结构: {chunk}")
+                            
+                            # 检查delta结构，不同版本的OpenAI库可能有不同的结构
+                            delta = chunk.choices[0].delta
+                            
+                            # 尝试多种方式获取内容
+                            content = None
+                            # 方法1: 直接获取content属性
+                            if hasattr(delta, 'content') and delta.content is not None:
+                                content = delta.content
+                            # 方法2: 尝试作为字典访问
+                            elif hasattr(delta, 'get'):
+                                content = delta.get('content')
+                            # 方法3: 尝试获取字典格式
+                            elif isinstance(delta, dict):
+                                content = delta.get('content')
+                            
+                            if content:
+                                answer += content
+                                if len(answer) < 50:  # 只记录前50个字符以避免日志过大
+                                    logger.debug(f"已接收内容: {answer}")
+                        except Exception as e:
+                            logger.error(f"处理OpenAI响应流错误: {str(e)}，chunk类型: {type(chunk)}")
+                            # 尝试直接获取JSON数据
                             try:
-                                save_results(task_id, results)
-                            except Exception as e:
-                                logger.error(f"保存中间结果出错: {str(e)}")
+                                logger.info(f"尝试直接解析chunk: {chunk}")
+                                if hasattr(chunk, 'model_dump_json'):
+                                    logger.info(f"chunk model_dump_json: {chunk.model_dump_json()}")
+                            except Exception as parse_err:
+                                logger.error(f"解析chunk失败: {str(parse_err)}")
+                            continue
+                    
+                    # 每次有新内容时更新当前任务状态
+                    result = {
+                        "question": question,
+                        "answer": answer,
+                        "is_streaming": True
+                    }
+                    
+                    # 更新当前结果
+                    if len(results) > i:
+                        results[i] = result
+                    else:
+                        results.append(result)
+                        
+                    # 更新任务状态
+                    current_tasks[task_id]['results'] = results.copy()
+                    current_tasks[task_id]['last_update'] = time.time()
+                    
+                    # 每积累一定字符保存一次中间结果
+                    if len(answer) % 50 == 0:
+                        try:
+                            save_results(task_id, results)
+                        except Exception as e:
+                            logger.error(f"保存中间结果出错: {str(e)}")
                 
                 # 检查是否因为暂停而中断了流式处理
                 if current_tasks[task_id].get('paused', False):
@@ -231,10 +333,21 @@ def index():
         task = current_tasks[last_task_id]
         system_prompt = task.get('system_prompt', '')
         temperature = task.get('temperature', 0.7)
+        model_provider = task.get('model_provider', 'volcano')
+        volcano_base_url = task.get('base_url', 'https://ark.cn-beijing.volces.com/api/v3') if model_provider == 'volcano' else 'https://ark.cn-beijing.volces.com/api/v3'
+        volcano_model = task.get('model_name', 'ep-20250317192842-2mhtn') if model_provider == 'volcano' else 'ep-20250317192842-2mhtn'
+        openai_base_url = task.get('base_url', 'https://api.openai.com/v1') if model_provider == 'openai' else 'https://api.openai.com/v1'
+        openai_model = task.get('model_name', 'gpt-4o') if model_provider == 'openai' else 'gpt-4o'
+        
         return render_template('index.html', 
                               last_task_id=last_task_id,
                               system_prompt=system_prompt,
-                              temperature=temperature)
+                              temperature=temperature,
+                              model_provider=model_provider,
+                              volcano_base_url=volcano_base_url,
+                              volcano_model=volcano_model,
+                              openai_base_url=openai_base_url,
+                              openai_model=openai_model)
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
@@ -245,8 +358,20 @@ def upload_file():
     file = request.files['file']
     system_prompt = request.form.get('system_prompt', '你是人工智能助手。')
     api_key = request.form.get('api_key', os.getenv('ARK_API_KEY', ''))
-    temperature = float(request.form.get('temperature', 0.7))  # 获取温度参数，默认0.7
-    logger.info(f"收到温度参数: {temperature}")
+    temperature = float(request.form.get('temperature', 0.7))
+    
+    # 获取模型提供商和相关设置
+    model_provider = request.form.get('model_provider', 'volcano')
+    
+    # 根据提供商获取不同的设置
+    if model_provider == 'volcano':
+        base_url = request.form.get('volcano_base_url', 'https://ark.cn-beijing.volces.com/api/v3')
+        model_name = request.form.get('volcano_model', 'ep-20250317192842-2mhtn')
+    else:
+        base_url = request.form.get('openai_base_url', 'https://api.openai.com/v1')
+        model_name = request.form.get('openai_model', 'gpt-4o')
+    
+    logger.info(f"收到请求：提供商={model_provider}, 模型={model_name}, 温度={temperature}")
     
     if file.filename == '':
         return redirect(request.url)
@@ -280,6 +405,9 @@ def upload_file():
                 'system_prompt': system_prompt,  # 保存系统提示词
                 'api_key': api_key,  # 保存API密钥
                 'temperature': temperature,  # 保存温度参数
+                'model_provider': model_provider,  # 保存模型提供商
+                'base_url': base_url,  # 保存基础URL
+                'model_name': model_name,  # 保存模型名称
                 'status': 'starting',
                 'total': len(questions),
                 'completed': 0,
@@ -288,7 +416,7 @@ def upload_file():
             
             thread = threading.Thread(
                 target=process_questions,
-                args=(task_id, questions, system_prompt, api_key, temperature)  # 传递温度参数
+                args=(task_id, questions, system_prompt, api_key, temperature, model_provider, base_url, model_name)
             )
             thread.daemon = True
             thread.start()
@@ -407,7 +535,10 @@ def control_task(task_id):
             'task_info': {
                 'system_prompt': current_tasks[task_id].get('system_prompt', ''),
                 'filename': current_tasks[task_id].get('filename', ''),
-                'temperature': current_tasks[task_id].get('temperature', 0.7)
+                'temperature': current_tasks[task_id].get('temperature', 0.7),
+                'model_provider': current_tasks[task_id].get('model_provider', 'volcano'),
+                'base_url': current_tasks[task_id].get('base_url', ''),
+                'model_name': current_tasks[task_id].get('model_name', '')
             }
         })
     elif action == 'resume':
