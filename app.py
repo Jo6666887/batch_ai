@@ -903,7 +903,8 @@ def get_generation_status(task_id):
                 'generation_prompt': generation_prompt,
                 'gen_system_prompt': gen_system_prompt,
                 'gen_temperature': gen_temperature,
-                'last_update': time.time()
+                'last_update': time.time(),
+                'is_streaming': False
             })
         logger.warning(f"API请求：未找到生成任务 {task_id}")
         return jsonify({'error': '未找到生成任务'}), 404
@@ -918,7 +919,9 @@ def get_generation_status(task_id):
         'generation_prompt': task.get('generation_prompt', ''),
         'gen_system_prompt': task.get('gen_system_prompt', ''),
         'gen_temperature': task.get('gen_temperature', 0.8),
-        'last_update': task.get('last_update', time.time())
+        'last_update': task.get('last_update', time.time()),
+        'is_streaming': task.get('is_streaming', False),
+        'paused': task.get('paused', False)
     })
 
 @app.route('/download/generation/<task_id>')
@@ -976,6 +979,8 @@ def process_question_generation(task_id, prompt, system_prompt, api_key, tempera
     results = []
     current_tasks[task_id]['status'] = 'processing'
     current_tasks[task_id]['last_update'] = time.time()
+    current_tasks[task_id]['results'] = []  # 初始化空结果列表
+    current_tasks[task_id]['is_streaming'] = True  # 标记为流式处理
     
     # 使用实际的API密钥
     actual_api_key = api_key if api_key else os.environ.get("ARK_API_KEY")
@@ -1003,34 +1008,65 @@ def process_question_generation(task_id, prompt, system_prompt, api_key, tempera
     try:
         logger.info(f"发送生成问题请求，温度: {temperature}")
         
-        # 发送请求
+        # 发送流式请求
         if model_provider == "volcano":
-            response = client.chat.completions.create(
+            stream = client.chat.completions.create(
                 model=actual_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=float(temperature)
+                temperature=float(temperature),
+                stream=True  # 启用流式输出
             )
-            
-            generated_text = response.choices[0].message.content
         else:
-            response = client.chat.completions.create(
+            stream = client.chat.completions.create(
                 model=actual_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=float(temperature)
+                temperature=float(temperature),
+                stream=True  # 启用流式输出
             )
+        
+        # 实时收集流式响应
+        generated_text = ""
+        for chunk in stream:
+            # 提取内容
+            if model_provider == "volcano":
+                if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                    generated_text += chunk.choices[0].delta.content
+            else:
+                if chunk.choices and chunk.choices[0].delta and hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
+                    generated_text += chunk.choices[0].delta.content
             
-            generated_text = response.choices[0].message.content
+            # 实时解析已有文本中的问题
+            current_questions = []
+            lines = generated_text.strip().split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                # 匹配格式为"1. 问题"或"1.问题"或"1、问题"的行
+                if re.match(r'^\d+[\.\、] .+', line) or re.match(r'^\d+\..+', line):
+                    # 去除序号和点，保留问题内容
+                    question = re.sub(r'^\d+[\.\、]\s*', '', line).strip()
+                    if question:
+                        current_questions.append(question)
+            
+            # 更新任务状态
+            if current_questions:
+                # 限制问题数量
+                current_questions = current_questions[:current_tasks[task_id]['num_questions']]
+                current_tasks[task_id]['results'] = current_questions
+                current_tasks[task_id]['completed'] = len(current_questions)
+                current_tasks[task_id]['last_update'] = time.time()
         
-        logger.info(f"问题生成成功，处理结果文本")
+        # 流式生成完成后，做最后的处理
+        logger.info(f"问题生成流式响应完成，处理最终结果文本")
         
-        # 处理生成的文本，提取问题
-        questions = []
+        # 最终处理生成的文本
+        final_questions = []
         lines = generated_text.strip().split('\n')
         
         for line in lines:
@@ -1040,21 +1076,22 @@ def process_question_generation(task_id, prompt, system_prompt, api_key, tempera
                 # 去除序号和点，保留问题内容
                 question = re.sub(r'^\d+[\.\、]\s*', '', line).strip()
                 if question:
-                    questions.append(question)
+                    final_questions.append(question)
         
         # 如果没有匹配到正确格式的问题，尝试直接按行分割
-        if not questions:
+        if not final_questions:
             for line in lines:
                 line = line.strip()
                 if line and not line.startswith('#') and not line.startswith('---'):
-                    questions.append(line)
+                    final_questions.append(line)
         
-        # 更新结果
-        results = questions[:current_tasks[task_id]['num_questions']]
+        # 更新最终结果
+        results = final_questions[:current_tasks[task_id]['num_questions']]
         
         current_tasks[task_id]['completed'] = len(results)
         current_tasks[task_id]['results'] = results
         current_tasks[task_id]['status'] = 'completed'
+        current_tasks[task_id]['is_streaming'] = False  # 流式处理结束
         current_tasks[task_id]['last_update'] = time.time()
         
         # 保存结果
@@ -1067,6 +1104,7 @@ def process_question_generation(task_id, prompt, system_prompt, api_key, tempera
         logger.error(error_msg)
         current_tasks[task_id]['status'] = 'failed'
         current_tasks[task_id]['error'] = error_msg
+        current_tasks[task_id]['is_streaming'] = False
         current_tasks[task_id]['last_update'] = time.time()
     
     return results

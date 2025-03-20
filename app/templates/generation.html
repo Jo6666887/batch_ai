@@ -35,6 +35,12 @@
             padding: 1rem;
             border-radius: 0.25rem;
             box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            transition: all 0.3s ease;
+        }
+        .question-card.streaming {
+            border-left-color: #0093E9;
+            background-color: #f0f8ff;
+            box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.1);
         }
         .status-info {
             margin-bottom: 1.5rem;
@@ -241,7 +247,17 @@
                     if (data.status === 'completed') {
                         progressPercent = 100;
                     } else if (data.status === 'processing') {
-                        progressPercent = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 50;
+                        // 如果有总目标数量，计算完成百分比
+                        // 否则基于当前已生成问题数量估算进度
+                        if (data.total > 0) {
+                            progressPercent = Math.round((data.completed / data.total) * 100);
+                        } else if (data.completed > 0) {
+                            // 根据已生成的问题数量估算进度
+                            const estimatedProgress = Math.min(90, Math.round((data.completed / data.total) * 100));
+                            progressPercent = estimatedProgress;
+                        } else {
+                            progressPercent = 10; // 默认开始进度
+                        }
                     }
                     
                     document.getElementById('progress-bar').style.width = `${progressPercent}%`;
@@ -250,7 +266,9 @@
                     
                     // 更新状态文本
                     let statusText = '正在生成问题...';
-                    if (data.status === 'completed') {
+                    if (data.is_streaming) {
+                        statusText = '🟢 正在流式生成问题...';
+                    } else if (data.status === 'completed') {
                         statusText = '✅ 问题生成完成';
                         document.getElementById('download-dropdown').style.display = 'inline-block';
                         document.getElementById('progress-bar').classList.remove('progress-bar-animated');
@@ -265,13 +283,15 @@
                     // 更新问题列表
                     if (data.results && data.results.length > 0) {
                         questionsList = data.results;
-                        updateQuestionsList(data.results);
+                        updateQuestionsList(data.results, data.is_streaming);
                     }
                     
                     // 根据状态决定轮询间隔
                     let nextPollInterval;
                     if (data.status === 'completed' || data.status === 'failed') {
                         nextPollInterval = 5000; // 完成或失败后每5秒轮询一次
+                    } else if (data.is_streaming) {
+                        nextPollInterval = 300; // 流式生成时更频繁地轮询
                     } else {
                         nextPollInterval = 1000; // 处理中每秒轮询一次
                     }
@@ -286,11 +306,11 @@
         }
         
         // 更新问题列表
-        function updateQuestionsList(questions) {
+        function updateQuestionsList(questions, isStreaming) {
             const container = document.getElementById('questions-container');
             
-            // 如果已经显示加载指示器，则清空容器
-            if (document.getElementById('loading-indicator')) {
+            // 如果已经显示加载指示器且有问题，则清空容器
+            if (document.getElementById('loading-indicator') && questions.length > 0) {
                 container.innerHTML = '';
             }
             
@@ -301,11 +321,48 @@
                 if (!existingCard) {
                     const card = document.createElement('div');
                     card.className = 'question-card';
+                    if (isStreaming && index === questions.length - 1) {
+                        card.className += ' streaming';
+                    }
                     card.setAttribute('data-index', index);
-                    card.innerHTML = `
-                        <div class="question-text">${index + 1}. ${question}</div>
-                    `;
+                    
+                    let questionHTML = `<div class="question-text">${index + 1}. ${question}</div>`;
+                    if (isStreaming && index === questions.length - 1) {
+                        questionHTML += `<span class="streaming-indicator">正在生成...</span>`;
+                    }
+                    
+                    card.innerHTML = questionHTML;
                     container.appendChild(card);
+                    
+                    // 如果是流式生成的最后一个问题，自动滚动到视图
+                    if (isStreaming && index === questions.length - 1) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                    }
+                } else if (isStreaming && index === questions.length - 1) {
+                    // 更新最后一个正在生成的问题的样式
+                    existingCard.className = 'question-card streaming';
+                    // 确保问题文本是最新的
+                    existingCard.querySelector('.question-text').textContent = `${index + 1}. ${question}`;
+                    
+                    // 添加流式指示器（如果不存在）
+                    if (!existingCard.querySelector('.streaming-indicator')) {
+                        const indicator = document.createElement('span');
+                        indicator.className = 'streaming-indicator';
+                        indicator.textContent = '正在生成...';
+                        existingCard.appendChild(indicator);
+                    }
+                    
+                    // 滚动到正在更新的卡片
+                    existingCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                } else {
+                    // 对于已完成生成的问题，移除流式样式和指示器
+                    existingCard.className = 'question-card';
+                    const indicator = existingCard.querySelector('.streaming-indicator');
+                    if (indicator) {
+                        indicator.remove();
+                    }
+                    // 更新问题文本
+                    existingCard.querySelector('.question-text').textContent = `${index + 1}. ${question}`;
                 }
             });
         }
