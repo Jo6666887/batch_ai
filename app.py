@@ -6,10 +6,14 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, s
 from werkzeug.utils import secure_filename
 import threading
 import time
+import concurrent.futures
 from dotenv import load_dotenv
 import logging
 from volcenginesdkarkruntime import Ark
 import openai  # 添加OpenAI库
+import httpx
+import asyncio
+from functools import partial
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +36,16 @@ os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
 # 全局变量用于存储当前正在处理的任务
 current_tasks = {}
 
+# 创建线程池
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+
+# 创建异步HTTP客户端
+async_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(60.0, connect=5.0),
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    http2=True  # 已安装h2依赖，启用HTTP/2以提高性能
+)
+
 def process_questions(task_id, questions, system_prompt, api_key, temperature, model_provider="volcano", base_url=None, model_name=None):
     """后台处理问题的函数"""
     logger.info(f"开始处理任务 {task_id}，使用温度参数: {temperature}，模型提供商: {model_provider}")
@@ -53,10 +67,22 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
         actual_base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
         actual_model = model_name if model_name else "ep-20250317192842-2mhtn"
         logger.info(f"初始化火山引擎客户端: base_url={actual_base_url}, model={actual_model}")
-        client = Ark(
-            base_url=actual_base_url,
-            api_key=actual_api_key
-        )
+        
+        # 创建多个客户端实例以提高并发性能
+        clients = [
+            Ark(
+                base_url=actual_base_url,
+                api_key=actual_api_key
+            ) for _ in range(min(5, len(questions)))  # 最多创建5个客户端
+        ]
+        
+        # 如果没有问题，至少创建一个客户端
+        if not clients:
+            clients = [Ark(
+                base_url=actual_base_url,
+                api_key=actual_api_key
+            )]
+            
     else:
         # OpenAI客户端初始化
         actual_base_url = base_url if base_url else "https://api.openai.com/v1"
@@ -69,87 +95,80 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
         try:
             # 设置HTTP超时，增加兼容性
             import httpx
-            # 尝试为OpenAI库创建自定义的HTTP客户端
-            http_client = httpx.Client(
-                timeout=httpx.Timeout(60.0, connect=10.0),
-                follow_redirects=True
-            )
+            # 创建多个客户端以提高并发性能
+            http_clients = [
+                httpx.Client(
+                    timeout=httpx.Timeout(60.0, connect=10.0),
+                    follow_redirects=True
+                ) for _ in range(min(5, len(questions)))
+            ]
             
-            # 初始化OpenAI客户端
-            client = openai.OpenAI(
-                api_key=actual_api_key,
-                base_url=actual_base_url,
-                http_client=http_client,
-                max_retries=3  # 添加重试次数
-            )
+            # 初始化多个OpenAI客户端
+            clients = [
+                openai.OpenAI(
+                    api_key=actual_api_key,
+                    base_url=actual_base_url,
+                    http_client=http_client,
+                    max_retries=3
+                ) for http_client in http_clients
+            ]
             logger.info("OpenAI客户端初始化成功")
         except Exception as e:
             # 如果高级配置失败，使用基本配置
             logger.warning(f"使用高级配置初始化OpenAI客户端失败: {str(e)}，尝试使用基本配置")
-            client = openai.OpenAI(
+            clients = [openai.OpenAI(
                 api_key=actual_api_key,
                 base_url=actual_base_url
-            )
+            )]
             logger.info("使用基本配置初始化OpenAI客户端成功")
     
-    i = 0
-    while i < len(questions):
-        current_tasks[task_id]['current_index'] = i  # 更新当前索引
-        
-        # 检查是否暂停
-        while current_tasks[task_id].get('paused', False):
-            logger.info(f"任务 {task_id} 已暂停，等待继续...")
-            # 暂停时每秒检查一次状态
-            time.sleep(1)
-            # 如果任务被删除，则退出
-            if task_id not in current_tasks:
-                logger.info(f"任务 {task_id} 已被删除，终止处理")
-                return results
-            # 当状态改变时立即退出循环
-            if not current_tasks[task_id].get('paused', False):
-                logger.info(f"任务 {task_id} 已恢复")
-                break
+    # 批量处理函数
+    def process_batch(batch_questions, start_idx):
+        batch_results = []
+        for idx, question in enumerate(batch_questions):
+            i = start_idx + idx
+            current_tasks[task_id]['current_index'] = i
             
-        question = questions[i]
-        
-        # 检查是否被标记为中断
-        was_interrupted = False
-        if len(results) > i and results[i].get('interrupted', False):
-            was_interrupted = True
-            logger.info(f"重新处理被中断的问题，索引: {i}")
+            # 检查是否暂停
+            while current_tasks[task_id].get('paused', False):
+                logger.info(f"任务 {task_id} 已暂停，等待继续...")
+                time.sleep(1)
+                if task_id not in current_tasks:
+                    logger.info(f"任务 {task_id} 已被删除，终止处理")
+                    return []
+                if not current_tasks[task_id].get('paused', False):
+                    logger.info(f"任务 {task_id} 已恢复")
+                    break
             
-        try:
-            logger.info(f"处理问题 {i+1}/{len(questions)}，使用温度: {temperature}")
-            
-            # 如果问题为空，跳过
+            # 跳过空问题
             if pd.isna(question) or str(question).strip() == '':
                 logger.warning(f"跳过空问题: 索引 {i}")
-                i += 1  # 移至下一个问题
+                batch_results.append(None)
                 continue
-                
+            
             # 确保问题是字符串类型
             question = str(question).strip()
             
-            # 使用流式API
-            answer = ""
+            # 选择客户端（轮询方式）
+            client_idx = i % len(clients)
+            client = clients[client_idx]
+            
+            # 检查是否被标记为中断
+            was_interrupted = False
+            if len(results) > i and results[i].get('interrupted', False):
+                was_interrupted = True
+                logger.info(f"重新处理被中断的问题，索引: {i}")
+            
             try:
-                # 根据不同的模型提供商发送请求
-                if model_provider == "volcano":
-                    # 火山引擎API
-                    logger.info(f"使用火山引擎API调用模型: {actual_model}")
-                    stream = client.chat.completions.create(
-                        model=actual_model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": question}
-                        ],
-                        stream=True,
-                        temperature=float(temperature)
-                    )
-                else:
-                    # OpenAI API
-                    logger.info(f"使用OpenAI API调用模型: {actual_model}, 基础URL: {actual_base_url}")
-                    try:
+                logger.info(f"处理问题 {i+1}/{len(questions)}，使用温度: {temperature}")
+                
+                # 使用流式API
+                answer = ""
+                try:
+                    # 根据不同的模型提供商发送请求
+                    if model_provider == "volcano":
+                        # 火山引擎API
+                        logger.info(f"使用火山引擎API调用模型: {actual_model}")
                         stream = client.chat.completions.create(
                             model=actual_model,
                             messages=[
@@ -159,164 +178,217 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
                             stream=True,
                             temperature=float(temperature)
                         )
-                        logger.info("OpenAI API请求成功发送")
-                    except Exception as e:
-                        logger.error(f"OpenAI API请求失败: {str(e)}")
-                        raise
-                
-                # 实时收集流式响应
-                for chunk in stream:
-                    # 检查是否在收集响应过程中被暂停
-                    if current_tasks[task_id].get('paused', False):
-                        logger.info(f"任务 {task_id} 在流式响应过程中被暂停")
-                        # 记录部分结果
-                        if answer:
-                            result = {
-                                "question": question,
-                                "answer": answer + "\n\n[由于任务暂停，回答未完成]",
-                                "is_streaming": False,
-                                "interrupted": True
-                            }
-                            
-                            if len(results) > i:
-                                results[i] = result
-                            else:
-                                results.append(result)
-                            
-                            current_tasks[task_id]['results'] = results.copy()
-                            current_tasks[task_id]['last_update'] = time.time()
-                            current_tasks[task_id]['interrupted'] = True
-                            save_results(task_id, results)
-                        
-                        # 停止处理当前流
-                        break
-                    
-                    # 根据不同API处理响应流
-                    if model_provider == "volcano":
-                        if not chunk.choices:
-                            continue
-                        if chunk.choices[0].delta and chunk.choices[0].delta.content:
-                            answer += chunk.choices[0].delta.content
                     else:
-                        # OpenAI API处理方式
+                        # OpenAI API
+                        logger.info(f"使用OpenAI API调用模型: {actual_model}, 基础URL: {actual_base_url}")
                         try:
-                            if not chunk.choices:
-                                logger.debug("OpenAI响应chunk没有choices")
-                                continue
-                            
-                            # 记录OpenAI响应的结构
-                            if i == 0 and len(answer) < 50:
-                                logger.info(f"OpenAI响应chunk结构: {chunk}")
-                            
-                            # 检查delta结构，不同版本的OpenAI库可能有不同的结构
-                            delta = chunk.choices[0].delta
-                            
-                            # 尝试多种方式获取内容
-                            content = None
-                            # 方法1: 直接获取content属性
-                            if hasattr(delta, 'content') and delta.content is not None:
-                                content = delta.content
-                            # 方法2: 尝试作为字典访问
-                            elif hasattr(delta, 'get'):
-                                content = delta.get('content')
-                            # 方法3: 尝试获取字典格式
-                            elif isinstance(delta, dict):
-                                content = delta.get('content')
-                            
-                            if content:
-                                answer += content
-                                if len(answer) < 50:  # 只记录前50个字符以避免日志过大
-                                    logger.debug(f"已接收内容: {answer}")
+                            stream = client.chat.completions.create(
+                                model=actual_model,
+                                messages=[
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": question}
+                                ],
+                                stream=True,
+                                temperature=float(temperature)
+                            )
+                            logger.info("OpenAI API请求成功发送")
                         except Exception as e:
-                            logger.error(f"处理OpenAI响应流错误: {str(e)}，chunk类型: {type(chunk)}")
-                            # 尝试直接获取JSON数据
-                            try:
-                                logger.info(f"尝试直接解析chunk: {chunk}")
-                                if hasattr(chunk, 'model_dump_json'):
-                                    logger.info(f"chunk model_dump_json: {chunk.model_dump_json()}")
-                            except Exception as parse_err:
-                                logger.error(f"解析chunk失败: {str(parse_err)}")
-                            continue
+                            logger.error(f"OpenAI API请求失败: {str(e)}")
+                            raise
                     
-                    # 每次有新内容时更新当前任务状态
+                    # 实时收集流式响应
+                    for chunk in stream:
+                        # 检查是否在收集响应过程中被暂停
+                        if current_tasks[task_id].get('paused', False):
+                            logger.info(f"任务 {task_id} 在流式响应过程中被暂停")
+                            # 记录部分结果
+                            if answer:
+                                result = {
+                                    "question": question,
+                                    "answer": answer + "\n\n[由于任务暂停，回答未完成]",
+                                    "is_streaming": False,
+                                    "interrupted": True
+                                }
+                                
+                                while len(batch_results) <= idx:
+                                    batch_results.append(None)
+                                batch_results[idx] = result
+                                
+                                # 更新任务状态
+                                current_tasks[task_id]['last_update'] = time.time()
+                                current_tasks[task_id]['interrupted'] = True
+                            
+                            # 停止处理当前流
+                            break
+                        
+                        # 根据不同API处理响应流
+                        if model_provider == "volcano":
+                            if not chunk.choices:
+                                continue
+                            if chunk.choices[0].delta and chunk.choices[0].delta.content:
+                                answer += chunk.choices[0].delta.content
+                        else:
+                            # OpenAI API处理方式
+                            try:
+                                if not chunk.choices:
+                                    logger.debug("OpenAI响应chunk没有choices")
+                                    continue
+                                
+                                # 记录OpenAI响应的结构
+                                if i == 0 and len(answer) < 50:
+                                    logger.info(f"OpenAI响应chunk结构: {chunk}")
+                                
+                                # 检查delta结构，不同版本的OpenAI库可能有不同的结构
+                                delta = chunk.choices[0].delta
+                                
+                                # 尝试多种方式获取内容
+                                content = None
+                                # 方法1: 直接获取content属性
+                                if hasattr(delta, 'content') and delta.content is not None:
+                                    content = delta.content
+                                # 方法2: 尝试作为字典访问
+                                elif hasattr(delta, 'get'):
+                                    content = delta.get('content')
+                                # 方法3: 尝试获取字典格式
+                                elif isinstance(delta, dict):
+                                    content = delta.get('content')
+                                
+                                if content:
+                                    answer += content
+                                    if len(answer) < 50:  # 只记录前50个字符以避免日志过大
+                                        logger.debug(f"已接收内容: {answer}")
+                            except Exception as e:
+                                logger.error(f"处理OpenAI响应流错误: {str(e)}，chunk类型: {type(chunk)}")
+                                # 尝试直接获取JSON数据
+                                try:
+                                    logger.info(f"尝试直接解析chunk: {chunk}")
+                                    if hasattr(chunk, 'model_dump_json'):
+                                        logger.info(f"chunk model_dump_json: {chunk.model_dump_json()}")
+                                except Exception as parse_err:
+                                    logger.error(f"解析chunk失败: {str(parse_err)}")
+                                continue
+                        
+                        # 每次有新内容时更新结果
+                        result = {
+                            "question": question,
+                            "answer": answer,
+                            "is_streaming": True
+                        }
+                        
+                        # 更新当前结果
+                        while len(batch_results) <= idx:
+                            batch_results.append(None)
+                        batch_results[idx] = result
+                    
+                    # 检查是否因为暂停而中断了流式处理
+                    if current_tasks[task_id].get('paused', False):
+                        # 不增加索引i，这样恢复时会重新处理当前问题
+                        continue
+                    
+                    # 流式输出完成后，移除streaming标记
                     result = {
                         "question": question,
                         "answer": answer,
-                        "is_streaming": True
+                        "is_streaming": False
                     }
-                    
-                    # 更新当前结果
-                    if len(results) > i:
-                        results[i] = result
-                    else:
-                        results.append(result)
-                        
-                    # 更新任务状态
-                    current_tasks[task_id]['results'] = results.copy()
-                    current_tasks[task_id]['last_update'] = time.time()
-                    
-                    # 每积累一定字符保存一次中间结果
-                    if len(answer) % 50 == 0:
-                        try:
-                            save_results(task_id, results)
-                        except Exception as e:
-                            logger.error(f"保存中间结果出错: {str(e)}")
-                
-                # 检查是否因为暂停而中断了流式处理
-                if current_tasks[task_id].get('paused', False):
-                    # 不增加索引i，这样恢复时会重新处理当前问题
-                    continue
-                
-                # 流式输出完成后，移除streaming标记
-                if len(results) > i:
-                    results[i]["is_streaming"] = False
                     # 如果这是一个被中断重新处理的问题，移除interrupted标记
                     if was_interrupted:
-                        results[i].pop('interrupted', None)
-                logger.info(f"成功获取流式回答: {answer[:100]}...")
-                
+                        result.pop('interrupted', None)
+                    
+                    while len(batch_results) <= idx:
+                        batch_results.append(None)
+                    batch_results[idx] = result
+                    
+                    logger.info(f"成功获取流式回答: {answer[:100]}...")
+                    
+                except Exception as e:
+                    error_msg = f"API请求或流处理过程中出错: {str(e)}"
+                    logger.error(error_msg)
+                    result = {
+                        "question": question,
+                        "answer": f"处理出错: {error_msg}",
+                        "is_streaming": False,
+                        "error": True
+                    }
+                    while len(batch_results) <= idx:
+                        batch_results.append(None)
+                    batch_results[idx] = result
+            
             except Exception as e:
-                error_msg = f"处理出错: {str(e)}"
+                error_msg = f"处理问题时出错: {str(e)}"
                 logger.error(error_msg)
-                answer = error_msg
-                
-                # 记录错误结果
                 result = {
                     "question": question,
-                    "answer": answer,
+                    "answer": f"处理出错: {error_msg}",
                     "is_streaming": False,
                     "error": True
                 }
-                
-                if len(results) > i:
-                    results[i] = result
-                else:
-                    results.append(result)
-            
-            # 更新进度
-            i += 1  # 只有成功处理后才增加索引
-            current_tasks[task_id]['completed'] = i
-            current_tasks[task_id]['results'] = results
-            
-            # 保存中间结果
-            try:
-                save_results(task_id, results)
-                logger.info(f"已保存中间结果，完成度: {i}/{len(questions)}")
-            except Exception as e:
-                logger.error(f"保存结果出错: {str(e)}")
-            
-            # 添加短暂延迟，避免请求过于频繁
-            time.sleep(0.5)
-            
-        except Exception as e:
-            logger.error(f"处理问题时出错: {str(e)}")
-            i += 1  # 错误时也要移至下一个问题
-            continue
+                while len(batch_results) <= idx:
+                    batch_results.append(None)
+                batch_results[idx] = result
+        
+        return batch_results
     
+    # 将问题分成较小的批次并行处理
+    batch_size = 3  # 每批最多处理3个问题
+    i = 0
+    while i < len(questions):
+        # 检查任务是否暂停或删除
+        if task_id not in current_tasks or current_tasks[task_id].get('paused', False):
+            if task_id not in current_tasks:
+                logger.info(f"任务 {task_id} 已被删除，终止处理")
+                return results
+            # 如果暂停，等待继续
+            while current_tasks[task_id].get('paused', False):
+                time.sleep(1)
+                # 如果任务被删除，退出
+                if task_id not in current_tasks:
+                    logger.info(f"任务 {task_id} 已被删除，终止处理")
+                    return results
+            
+        # 获取当前批次
+        batch_end = min(i + batch_size, len(questions))
+        batch = questions[i:batch_end]
+        
+        # 使用线程池处理当前批次
+        future = executor.submit(process_batch, batch, i)
+        batch_results = future.result()
+        
+        # 更新结果
+        for j, result in enumerate(batch_results):
+            if result is not None:
+                idx = i + j
+                if len(results) <= idx:
+                    # 扩展结果列表以适应当前索引
+                    results.extend([None] * (idx - len(results) + 1))
+                results[idx] = result
+                
+                # 更新任务状态
+                current_tasks[task_id]['results'] = results.copy()
+                
+                # 每积累一定字符保存一次中间结果
+                if idx % 3 == 0 or idx == len(questions) - 1:
+                    try:
+                        save_results(task_id, results)
+                    except Exception as e:
+                        logger.error(f"保存中间结果出错: {str(e)}")
+        
+        # 更新索引和完成数量
+        i = batch_end
+        current_tasks[task_id]['completed'] = i
+        current_tasks[task_id]['last_update'] = time.time()
+    
+    # 清理非流式结果中的is_streaming标记
+    for result in results:
+        if result and 'is_streaming' in result:
+            result.pop('is_streaming', None)
+    
+    # 保存最终结果
     current_tasks[task_id]['status'] = 'completed'
-    current_tasks[task_id]['interrupted'] = False
+    current_tasks[task_id]['completed'] = len(questions)
+    current_tasks[task_id]['last_update'] = time.time()
     save_results(task_id, results)
-    logger.info(f"任务 {task_id} 完成，共处理了 {len(results)} 个问题")
+    
     return results
 
 def save_results(task_id, results):
