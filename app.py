@@ -396,6 +396,22 @@ def save_results(task_id, results):
     filename = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
+    
+    # 保存任务元数据（包括系统提示词）
+    if task_id in current_tasks:
+        metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+        metadata = {
+            'system_prompt': current_tasks[task_id].get('system_prompt', ''),
+            'temperature': current_tasks[task_id].get('temperature', 0.7),
+            'model_provider': current_tasks[task_id].get('model_provider', 'volcano'),
+            'model_name': current_tasks[task_id].get('model_name', ''),
+            'timestamp': time.time()
+        }
+        try:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存元数据出错: {str(e)}")
 
 @app.route('/')
 def index():
@@ -509,6 +525,18 @@ def task_status(task_id):
         if os.path.exists(result_file):
             with open(result_file, 'r', encoding='utf-8') as f:
                 results = json.load(f)
+            
+            # 尝试获取任务的元数据
+            metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+            system_prompt = ""
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        system_prompt = metadata.get('system_prompt', '')
+                except Exception as e:
+                    logger.error(f"读取元数据文件出错: {str(e)}")
+            
             current_tasks[task_id] = {
                 'filename': 'recovered_task',
                 'status': 'completed',
@@ -518,7 +546,8 @@ def task_status(task_id):
                 'paused': False,
                 'last_update': time.time(),
                 'interrupted': False,
-                'current_index': len(results)
+                'current_index': len(results),
+                'system_prompt': system_prompt
             }
             logger.info(f"从文件恢复任务 {task_id}，共 {len(results)} 个结果")
         else:
@@ -534,6 +563,18 @@ def get_task_status(task_id):
         if os.path.exists(result_file):
             with open(result_file, 'r', encoding='utf-8') as f:
                 results = json.load(f)
+            
+            # 尝试获取系统提示词
+            system_prompt = ""
+            metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+            if os.path.exists(metadata_file):
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        system_prompt = metadata.get('system_prompt', '')
+                except Exception as e:
+                    logger.error(f"读取元数据文件出错: {str(e)}")
+            
             logger.info(f"API请求：任务 {task_id} 从文件加载，包含 {len(results)} 个结果")
             return jsonify({
                 'status': 'completed',
@@ -543,7 +584,8 @@ def get_task_status(task_id):
                 'paused': False,
                 'interrupted': False,
                 'current_index': -1,
-                'last_update': time.time()
+                'last_update': time.time(),
+                'system_prompt': system_prompt
             })
         logger.warning(f"API请求：未找到任务 {task_id}")
         return jsonify({'error': '未找到任务'}), 404
@@ -559,12 +601,13 @@ def get_task_status(task_id):
         'last_update': task.get('last_update', time.time()),
         'paused': task.get('paused', False),
         'interrupted': task.get('interrupted', False),
-        'current_index': task.get('current_index', -1)
+        'current_index': task.get('current_index', -1),
+        'system_prompt': task.get('system_prompt', '')
     })
 
 @app.route('/download/<task_id>')
 def download_results(task_id):
-    from flask import Response
+    from flask import Response, request
     
     result_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}.json')
     if not os.path.exists(result_file):
@@ -574,21 +617,87 @@ def download_results(task_id):
     with open(result_file, 'r', encoding='utf-8') as f:
         results = json.load(f)
     
-    logger.info(f"下载请求：生成任务 {task_id} 的CSV文件，包含 {len(results)} 个结果")
+    # 获取请求的格式
+    format_type = request.args.get('format', 'csv')
+    logger.info(f"下载请求：生成任务 {task_id} 的{format_type}文件，包含 {len(results)} 个结果")
     
-    # 创建CSV格式的响应
-    csv_data = "问题,回答\n"
-    for item in results:
-        q = item['question'].replace('"', '""')
-        a = item['answer'].replace('"', '""')
-        csv_data += f'"{q}","{a}"\n'
+    # 获取系统提示词作为instruction
+    system_prompt = ""
+    # 首先尝试从内存中的任务获取
+    if task_id in current_tasks:
+        system_prompt = current_tasks[task_id].get('system_prompt', '')
     
-    # 返回下载响应
-    return Response(
-        csv_data,
-        mimetype="text/csv",
-        headers={"Content-disposition": f"attachment; filename=results_{task_id}.csv"}
-    )
+    # 如果内存中没有，尝试从元数据文件获取
+    if not system_prompt:
+        metadata_file = os.path.join(app.config['RESULTS_FOLDER'], f'{task_id}_metadata.json')
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                    system_prompt = metadata.get('system_prompt', '')
+                    logger.info(f"从元数据文件加载系统提示词: {system_prompt[:30]}...")
+            except Exception as e:
+                logger.error(f"读取元数据文件出错: {str(e)}")
+    
+    # 如果仍然没有，使用默认值
+    if not system_prompt:
+        system_prompt = "你是人工智能助手。"
+        logger.info("使用默认系统提示词")
+    
+    if format_type == 'csv':
+        # 创建CSV格式的响应
+        csv_data = "问题,回答\n"
+        for item in results:
+            q = item['question'].replace('"', '""')
+            a = item['answer'].replace('"', '""')
+            csv_data += f'"{q}","{a}"\n'
+        
+        # 返回下载响应
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-disposition": f"attachment; filename=results_{task_id}.csv"}
+        )
+    elif format_type == 'json':
+        # 创建Alpaca格式的JSON，系统提示词为instruction，问题为input
+        alpaca_data = []
+        for item in results:
+            alpaca_item = {
+                "instruction": system_prompt,
+                "input": item['question'],
+                "output": item['answer'],
+                "system": "",
+                "history": ""
+            }
+            alpaca_data.append(alpaca_item)
+        
+        # 返回JSON格式
+        return Response(
+            json.dumps(alpaca_data, ensure_ascii=False, indent=2),
+            mimetype="application/json",
+            headers={"Content-disposition": f"attachment; filename=alpaca_results_{task_id}.json"}
+        )
+    elif format_type == 'jsonl':
+        # 创建Alpaca格式的JSONL，系统提示词为instruction，问题为input
+        jsonl_data = ""
+        for item in results:
+            alpaca_item = {
+                "instruction": system_prompt,
+                "input": item['question'],
+                "output": item['answer'],
+                "system": "",
+                "history": ""
+            }
+            jsonl_data += json.dumps(alpaca_item, ensure_ascii=False) + "\n"
+        
+        # 返回JSONL格式
+        return Response(
+            jsonl_data,
+            mimetype="application/jsonl",
+            headers={"Content-disposition": f"attachment; filename=alpaca_results_{task_id}.jsonl"}
+        )
+    else:
+        return "不支持的格式类型", 400
 
 @app.route('/api/task/<task_id>/control', methods=['POST'])
 def control_task(task_id):

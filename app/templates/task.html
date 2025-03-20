@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>批量问题处理 - 任务进度</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <style>
         body {
             padding-top: 2rem;
@@ -146,7 +147,17 @@
                     <div>
                         <button id="control-btn" class="btn btn-warning me-2">终止任务</button>
                         <a id="back-btn" href="/" class="btn btn-outline-secondary">返回首页</a>
-                        <a id="download-btn" href="/download/{{ task_id }}" class="btn btn-success">下载结果</a>
+                        <div class="dropdown d-inline-block" id="download-dropdown" style="display: none;">
+                            <button class="btn btn-success dropdown-toggle" type="button" id="downloadDropdownButton" data-bs-toggle="dropdown" aria-expanded="false">
+                                下载结果
+                            </button>
+                            <ul class="dropdown-menu" aria-labelledby="downloadDropdownButton">
+                                <li><a class="dropdown-item" href="/download/{{ task_id }}?format=csv">CSV格式(问题,回答)</a></li>
+                                <li><a class="dropdown-item" href="/download/{{ task_id }}?format=json">Alpaca JSON格式(系统提示词为instruction,问题为input)</a></li>
+                                <li><a class="dropdown-item" href="/download/{{ task_id }}?format=jsonl">Alpaca JSONL格式(系统提示词为instruction,问题为input)</a></li>
+                            </ul>
+                        </div>
+                        <a id="download-btn" href="/download/{{ task_id }}" class="btn btn-success" style="display: none;">下载CSV结果</a>
                         <!-- 如果从任务页面直接点击返回，使用这个隐藏链接 -->
                         <a id="back-with-settings-btn" href="/?last_task_id={{ task_id }}" style="display: none;"></a>
                     </div>
@@ -163,7 +174,6 @@
             </div>
             
             <div class="header">
-                <h1>批量问题处理</h1>
                 <p class="lead">任务状态与结果</p>
             </div>
             
@@ -247,7 +257,7 @@
                 controlBtn.classList.remove('btn-warning');
                 controlBtn.classList.add('btn-success');
                 // 显示下载按钮，让用户可以下载当前结果
-                document.getElementById('download-btn').style.display = 'inline-block';
+                document.getElementById('download-dropdown').style.display = 'inline-block';
             } else {
                 controlBtn.textContent = '终止任务';
                 controlBtn.classList.remove('btn-success');
@@ -282,7 +292,7 @@
                         let statusText = '正在处理...';
                         if (data.status === 'completed') {
                             statusText = '✅ 处理完成';
-                            document.getElementById('download-btn').style.display = 'inline-block';
+                            document.getElementById('download-dropdown').style.display = 'inline-block';
                             document.getElementById('progress-bar').classList.remove('progress-bar-animated');
                             controlBtn.style.display = 'none';  // 隐藏控制按钮
                         } else if (data.status === 'failed') {
