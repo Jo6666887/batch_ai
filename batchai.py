@@ -66,7 +66,7 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
     if model_provider == "volcano":
         # 火山引擎客户端初始化
         actual_base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
-        actual_model = model_name if model_name else "ep-20250317192842-2mhtn"
+        actual_model = model_name if model_name else "ep-20250317184554-g5985"
         logger.info(f"初始化火山引擎客户端: base_url={actual_base_url}, model={actual_model}")
         
         # 创建多个客户端实例以提高并发性能
@@ -436,7 +436,7 @@ def index():
         temperature = task.get('temperature', 0.7)
         model_provider = task.get('model_provider', 'volcano')
         volcano_base_url = task.get('base_url', 'https://ark.cn-beijing.volces.com/api/v3') if model_provider == 'volcano' else 'https://ark.cn-beijing.volces.com/api/v3'
-        volcano_model = task.get('model_name', 'ep-20250317192842-2mhtn') if model_provider == 'volcano' else 'ep-20250317192842-2mhtn'
+        volcano_model = task.get('model_name', 'ep-20250317184554-g5985') if model_provider == 'volcano' else 'ep-20250317184554-g5985'
         openai_base_url = task.get('base_url', 'https://api.openai.com/v1') if model_provider == 'openai' else 'https://api.openai.com/v1'
         openai_model = task.get('model_name', 'gpt-4o') if model_provider == 'openai' else 'gpt-4o'
         
@@ -467,7 +467,7 @@ def upload_file():
     # 根据提供商获取不同的设置
     if model_provider == 'volcano':
         base_url = request.form.get('volcano_base_url', 'https://ark.cn-beijing.volces.com/api/v3')
-        model_name = request.form.get('volcano_model', 'ep-20250317192842-2mhtn')
+        model_name = request.form.get('volcano_model', 'ep-20250317184554-g5985')
     else:
         base_url = request.form.get('openai_base_url', 'https://api.openai.com/v1')
         model_name = request.form.get('openai_model', 'gpt-4o')
@@ -792,7 +792,7 @@ def generate_questions():
     # 使用默认模型提供商
     model_provider = "volcano"
     base_url = "https://ark.cn-beijing.volces.com/api/v3"
-    model_name = "ep-20250317192842-2mhtn"
+    model_name = "ep-20250317184554-g5985"
     
     # 创建生成任务
     task_id = f"gen_{int(time.time())}"
