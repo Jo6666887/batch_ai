@@ -158,6 +158,9 @@
                                         <a href="/download/{{ task.id }}" class="btn btn-sm btn-success">下载结果</a>
                                     {% endif %}
                                 {% endif %}
+                                
+                                <button class="btn btn-sm btn-outline-secondary rename-task-btn" data-task-id="{{ task.id }}" data-task-name="{{ task.filename }}">重命名</button>
+                                <button class="btn btn-sm btn-outline-danger delete-task-btn" data-task-id="{{ task.id }}">删除任务</button>
                             </div>
                         </div>
                     {% endfor %}
@@ -172,11 +175,146 @@
         </div>
     </div>
     
+    <!-- 重命名任务对话框 -->
+    <div class="modal fade" id="renameTaskModal" tabindex="-1" aria-labelledby="renameTaskModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="renameTaskModalLabel">重命名任务</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="rename-task-form">
+                        <input type="hidden" id="rename-task-id">
+                        <div class="mb-3">
+                            <label for="new-task-name" class="form-label">任务名称</label>
+                            <input type="text" class="form-control" id="new-task-name" required>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="confirm-rename">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 删除任务确认对话框 -->
+    <div class="modal fade" id="deleteTaskModal" tabindex="-1" aria-labelledby="deleteTaskModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="deleteTaskModalLabel">确认删除</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>确定要删除此任务吗？此操作无法撤销。</p>
+                    <input type="hidden" id="delete-task-id">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-danger" id="confirm-delete">确认删除</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <script>
         // 自动刷新页面
         setTimeout(function() {
             location.reload();
         }, 30000); // 每30秒刷新一次
+        
+        // 重命名任务功能
+        const renameTaskModal = new bootstrap.Modal(document.getElementById('renameTaskModal'));
+        const deleteTaskModal = new bootstrap.Modal(document.getElementById('deleteTaskModal'));
+        
+        // 点击重命名按钮
+        document.querySelectorAll('.rename-task-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const taskId = this.getAttribute('data-task-id');
+                const taskName = this.getAttribute('data-task-name');
+                
+                document.getElementById('rename-task-id').value = taskId;
+                document.getElementById('new-task-name').value = taskName;
+                
+                renameTaskModal.show();
+            });
+        });
+        
+        // 确认重命名
+        document.getElementById('confirm-rename').addEventListener('click', function() {
+            const taskId = document.getElementById('rename-task-id').value;
+            const newName = document.getElementById('new-task-name').value;
+            
+            if (!newName.trim()) {
+                alert('任务名称不能为空');
+                return;
+            }
+            
+            // 发送重命名请求
+            fetch(`/api/task/${taskId}/rename`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ new_name: newName })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('重命名失败');
+                }
+                return response.json();
+            })
+            .then(data => {
+                renameTaskModal.hide();
+                alert('重命名成功');
+                location.reload();
+            })
+            .catch(error => {
+                console.error('重命名任务出错:', error);
+                alert('重命名失败，请重试');
+            });
+        });
+        
+        // 点击删除按钮
+        document.querySelectorAll('.delete-task-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const taskId = this.getAttribute('data-task-id');
+                document.getElementById('delete-task-id').value = taskId;
+                
+                deleteTaskModal.show();
+            });
+        });
+        
+        // 确认删除
+        document.getElementById('confirm-delete').addEventListener('click', function() {
+            const taskId = document.getElementById('delete-task-id').value;
+            
+            // 发送删除请求
+            fetch(`/api/task/${taskId}/delete`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('删除失败');
+                }
+                return response.json();
+            })
+            .then(data => {
+                deleteTaskModal.hide();
+                alert('删除成功');
+                location.reload();
+            })
+            .catch(error => {
+                console.error('删除任务出错:', error);
+                alert('删除失败，请重试');
+            });
+        });
     </script>
 </body>
 </html> 

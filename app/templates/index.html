@@ -182,7 +182,12 @@
                         
                         <div class="mb-4">
                             <label for="system_prompt" class="form-label">系统提示词</label>
-                            <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">{{ system_prompt|default('你是人工智能助手，能够提供专业、准确的回答。') }}</textarea>
+                            <div class="input-group">
+                                <textarea class="form-control" id="system_prompt" name="system_prompt" rows="4">{{ system_prompt|default('你是人工智能助手，能够提供专业、准确的回答。') }}</textarea>
+                                <button class="btn btn-outline-primary optimize-prompt-btn" type="button" title="优化提示词">
+                                    <i class="bi bi-magic"></i>
+                                </button>
+                            </div>
                             <div class="form-text">设置AI助手的行为和角色</div>
                         </div>
 
@@ -240,7 +245,12 @@
                         
                         <div class="mb-4">
                             <label for="gen_system_prompt" class="form-label">系统提示词（可选）</label>
-                            <textarea class="form-control" id="gen_system_prompt" name="gen_system_prompt" rows="3">{{ gen_system_prompt|default('你是专业的问题生成器，善于根据主题创建有深度、多样化的问题。') }}</textarea>
+                            <div class="input-group">
+                                <textarea class="form-control" id="gen_system_prompt" name="gen_system_prompt" rows="3">{{ gen_system_prompt|default('你是专业的问题生成器，善于根据主题创建有深度、多样化的问题。') }}</textarea>
+                                <button class="btn btn-outline-primary optimize-prompt-btn" type="button" title="优化提示词">
+                                    <i class="bi bi-magic"></i>
+                                </button>
+                            </div>
                             <div class="form-text">设置生成问题的AI助手的角色</div>
                         </div>
                         
@@ -336,6 +346,35 @@
         </div>
     </div>
 
+    <!-- 提示词优化弹窗 -->
+    <div class="modal fade" id="optimizePromptModal" tabindex="-1" aria-labelledby="optimizePromptModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="optimizePromptModalLabel">优化提示词</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">当前提示词</label>
+                        <textarea class="form-control" id="current-prompt" rows="3" readonly></textarea>
+                    </div>
+                    <div class="progress mb-3" id="optimize-progress" style="display: none;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 100%"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">优化后的提示词</label>
+                        <textarea class="form-control" id="optimized-prompt" rows="5"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="use-optimized-prompt">使用优化提示词</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 在页面底部引入Bootstrap JavaScript -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css"></script>
@@ -360,6 +399,76 @@
         // 生成问题集表单提交
         document.getElementById('submit-generate').addEventListener('click', function() {
             document.getElementById('generate-questions-form').submit();
+        });
+
+        // 处理提示词优化
+        const optimizePromptModal = new bootstrap.Modal(document.getElementById('optimizePromptModal'));
+        let currentPromptInput = null;
+
+        // 点击优化提示词按钮
+        document.querySelectorAll('.optimize-prompt-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                // 获取按钮关联的textarea
+                const promptTextarea = this.closest('.input-group').querySelector('textarea');
+                const promptValue = promptTextarea.value.trim();
+                
+                if (!promptValue) {
+                    alert('请先输入提示词');
+                    return;
+                }
+                
+                // 记录当前操作的输入框
+                currentPromptInput = promptTextarea;
+                
+                // 显示当前提示词
+                document.getElementById('current-prompt').value = promptValue;
+                document.getElementById('optimized-prompt').value = '';
+                
+                // 显示优化对话框
+                optimizePromptModal.show();
+                
+                // 显示进度条
+                document.getElementById('optimize-progress').style.display = 'block';
+                
+                // 调用API优化提示词
+                fetch('/api/optimize_prompt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ prompt: promptValue })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('优化失败');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // 隐藏进度条
+                    document.getElementById('optimize-progress').style.display = 'none';
+                    
+                    // 显示优化后的提示词
+                    document.getElementById('optimized-prompt').value = data.optimized_prompt;
+                })
+                .catch(error => {
+                    // 隐藏进度条
+                    document.getElementById('optimize-progress').style.display = 'none';
+                    
+                    console.error('优化提示词出错:', error);
+                    alert('优化失败，请重试');
+                });
+            });
+        });
+        
+        // 使用优化后的提示词
+        document.getElementById('use-optimized-prompt').addEventListener('click', function() {
+            const optimizedPrompt = document.getElementById('optimized-prompt').value;
+            
+            if (currentPromptInput && optimizedPrompt) {
+                currentPromptInput.value = optimizedPrompt;
+                optimizePromptModal.hide();
+            }
         });
 
         // 模型提供商切换

@@ -1257,5 +1257,124 @@ def list_tasks():
     
     return render_template('tasks.html', tasks=task_summaries)
 
+@app.route('/api/task/<task_id>/resume', methods=['POST'])
+def resume_task(task_id):
+    """恢复暂停的任务"""
+    if task_id in current_tasks:
+        current_tasks[task_id]['paused'] = False
+        current_tasks[task_id]['last_update'] = time.time()
+        return jsonify({"status": "success", "message": "Task resumed"})
+    return jsonify({"status": "error", "message": "Task not found"}), 404
+
+@app.route('/api/task/<task_id>/rename', methods=['POST'])
+def rename_task(task_id):
+    """重命名任务"""
+    if task_id not in current_tasks:
+        return jsonify({"status": "error", "message": "任务不存在"}), 404
+    
+    try:
+        data = request.get_json()
+        new_name = data.get('new_name', '')
+        
+        if not new_name.strip():
+            return jsonify({"status": "error", "message": "任务名称不能为空"}), 400
+        
+        current_tasks[task_id]['filename'] = new_name
+        current_tasks[task_id]['last_update'] = time.time()
+        
+        logger.info(f"任务 {task_id} 已重命名为: {new_name}")
+        return jsonify({"status": "success", "message": "任务重命名成功"})
+    except Exception as e:
+        logger.error(f"重命名任务出错: {str(e)}")
+        return jsonify({"status": "error", "message": f"重命名失败: {str(e)}"}), 500
+
+@app.route('/api/task/<task_id>/delete', methods=['POST'])
+def delete_task(task_id):
+    """删除任务"""
+    if task_id not in current_tasks:
+        return jsonify({"status": "error", "message": "任务不存在"}), 404
+    
+    try:
+        # 如果任务正在运行，先暂停它
+        if current_tasks[task_id].get('status') == 'processing' and not current_tasks[task_id].get('paused', False):
+            current_tasks[task_id]['paused'] = True
+            current_tasks[task_id]['interrupted'] = True
+        
+        # 从任务列表中移除
+        task_info = current_tasks.pop(task_id)
+        logger.info(f"任务 {task_id} 已删除, 类型: {task_info.get('type', '未知')}")
+        
+        return jsonify({"status": "success", "message": "任务删除成功"})
+    except Exception as e:
+        logger.error(f"删除任务出错: {str(e)}")
+        return jsonify({"status": "error", "message": f"删除失败: {str(e)}"}), 500
+
+@app.route('/api/optimize_prompt', methods=['POST'])
+def optimize_prompt():
+    """使用当前配置的大模型优化提示词"""
+    try:
+        data = request.get_json()
+        original_prompt = data.get('prompt', '')
+        
+        if not original_prompt.strip():
+            return jsonify({"status": "error", "message": "提示词不能为空"}), 400
+        
+        # 获取当前配置的模型信息
+        model_provider = request.args.get('model_provider', 'volcano')
+        api_key = os.environ.get("ARK_API_KEY")  # 使用系统默认的API密钥
+        
+        # 根据模型提供商选择不同实现
+        if model_provider == 'volcano':
+            base_url = 'https://ark.cn-beijing.volces.com/api/v3'
+            model_name = 'ep-20250317184554-g5985'
+            
+            client = Ark(
+                base_url=base_url,
+                api_key=api_key
+            )
+            
+            # 调用模型优化提示词
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "你是一位专业的提示词专家，优化用户提供的提示词，确保大模型能更好的理解和回答。保持专业、简洁、精确。不要回答其他的内容。"},
+                    {"role": "user", "content": f"请优化以下提示词，使其更加清晰、专业、有效:\n\n{original_prompt}，不要添加任何其他内容。"}
+                ],
+                temperature=0.5
+            )
+            
+            optimized_prompt = response.choices[0].message.content
+        else:
+            # OpenAI实现
+            base_url = 'https://api.openai.com/v1'
+            model_name = 'gpt-4o'
+            
+            client = openai.OpenAI(
+                api_key=api_key,
+                base_url=base_url
+            )
+            
+            # 调用模型优化提示词
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "你是一位专业的提示词专家，优化用户提供的提示词，确保大模型能更好的理解和回答。保持专业、简洁、精确。不要添加不必要的内容。"},
+                    {"role": "user", "content": f"请优化以下提示词，使其更加清晰、专业、有效:\n\n{original_prompt}"}
+                ],
+                temperature=0.5
+            )
+            
+            optimized_prompt = response.choices[0].message.content
+        
+        logger.info(f"提示词优化成功: '{original_prompt}' -> '{optimized_prompt}'")
+        return jsonify({
+            "status": "success", 
+            "original_prompt": original_prompt,
+            "optimized_prompt": optimized_prompt
+        })
+    except Exception as e:
+        logger.error(f"优化提示词出错: {str(e)}")
+        return jsonify({"status": "error", "message": f"优化失败: {str(e)}"}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
