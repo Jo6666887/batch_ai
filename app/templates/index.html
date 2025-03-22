@@ -96,6 +96,9 @@
             
             <!-- 添加任务管理按钮和模型设置按钮 -->
             <div class="position-absolute top-0 end-0">
+                <button type="button" class="btn btn-light me-2" data-bs-toggle="modal" data-bs-target="#generateQuestionsModal">
+                    <i class="bi bi-plus-circle"></i> 生成问题集
+                </button>
                 <a href="/tasks" class="btn btn-light me-2">
                     <i class="bi bi-list-check"></i> 任务管理
                 </a>
@@ -105,59 +108,9 @@
             </div>
         </div>
         
-        <div class="row">
-            <!-- 左侧卡片：生成问题数据集 -->
-            <div class="col-md-5 mb-4">
-                <div class="form-container">
-                    <div class="header">
-                        <h1 class="text-xl font-bold text-gray-800">生成问题数据集</h1>
-                        <p class="lead text-gray-600 mt-2">根据提示词生成AI问题</p>
-                    </div>
-                    
-                    <form action="/generate_questions" method="post">
-                        <div class="mb-4">
-                            <label for="generation_prompt" class="form-label">生成提示词</label>
-                            <textarea class="form-control" id="generation_prompt" name="generation_prompt" rows="4" placeholder="请输入生成问题的提示词，例如：'生成关于人工智能技术的问题'">{{ generation_prompt|default('') }}</textarea>
-                            <div class="form-text">指导AI生成什么类型的问题</div>
-                        </div>
-                        
-                        <div class="mb-4">
-                            <label for="num_questions" class="form-label">生成问题数量</label>
-                            <input type="number" class="form-control" id="num_questions" name="num_questions" min="1" max="100" value="{{ num_questions|default(10) }}">
-                            <div class="form-text">建议数量：1-100，数量越多生成时间越长</div>
-                        </div>
-                        
-                        <div class="mb-4">
-                            <label for="gen_system_prompt" class="form-label">系统提示词（可选）</label>
-                            <textarea class="form-control" id="gen_system_prompt" name="gen_system_prompt" rows="3">{{ gen_system_prompt|default('你是专业的问题生成器，善于根据主题创建有深度、多样化的问题。') }}</textarea>
-                            <div class="form-text">设置生成问题的AI助手的角色</div>
-                        </div>
-                        
-                        <!-- 添加回温度滑块 -->
-                        <div class="mb-4">
-                            <label class="form-label">生成创造性 (Temperature)</label>
-                            <div class="temperature-slider">
-                                <input type="range" id="gen_temperature" name="gen_temperature" min="0" max="1" step="0.1" value="{{ gen_temperature|default(0.8) }}">
-                                <div class="temperature-labels">
-                                    <span>常规</span>
-                                    <span>平衡</span>
-                                    <span>创新</span>
-                                </div>
-                            </div>
-                            <div class="temperature-display">
-                                当前值: <span id="gen-temperature-value">{{ gen_temperature|default(0.8) }}</span>
-                            </div>
-                        </div>
-                        
-                        <div class="d-grid">
-                            <button type="submit" class="btn btn-success btn-lg bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600">生成问题集</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-            
-            <!-- 右侧卡片：批量回答问题 -->
-            <div class="col-md-7">
+        <!-- 主内容区：居中显示批量问题处理卡片 -->
+        <div class="row justify-content-center">
+            <div class="col-md-8">
                 <div class="form-container">
                     <div class="header">
                         <h1 class="text-xl font-bold text-gray-800">批量问题处理</h1>
@@ -263,6 +216,59 @@
         </div>
     </div>
     
+    <!-- 生成问题集弹窗 -->
+    <div class="modal fade" id="generateQuestionsModal" tabindex="-1" aria-labelledby="generateQuestionsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="generateQuestionsModalLabel">生成问题数据集</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form action="/generate_questions" method="post" id="generate-questions-form">
+                        <div class="mb-4">
+                            <label for="generation_prompt" class="form-label">生成提示词</label>
+                            <textarea class="form-control" id="generation_prompt" name="generation_prompt" rows="4" placeholder="请输入生成问题的提示词，例如：'生成关于人工智能技术的问题'">{{ generation_prompt|default('') }}</textarea>
+                            <div class="form-text">指导AI生成什么类型的问题</div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label for="num_questions" class="form-label">生成问题数量</label>
+                            <input type="number" class="form-control" id="num_questions" name="num_questions" min="1" max="100" value="{{ num_questions|default(10) }}">
+                            <div class="form-text">建议数量：1-100，数量越多生成时间越长</div>
+                        </div>
+                        
+                        <div class="mb-4">
+                            <label for="gen_system_prompt" class="form-label">系统提示词（可选）</label>
+                            <textarea class="form-control" id="gen_system_prompt" name="gen_system_prompt" rows="3">{{ gen_system_prompt|default('你是专业的问题生成器，善于根据主题创建有深度、多样化的问题。') }}</textarea>
+                            <div class="form-text">设置生成问题的AI助手的角色</div>
+                        </div>
+                        
+                        <!-- 添加回温度滑块 -->
+                        <div class="mb-4">
+                            <label class="form-label">生成创造性 (Temperature)</label>
+                            <div class="temperature-slider">
+                                <input type="range" id="gen_temperature" name="gen_temperature" min="0" max="1" step="0.1" value="{{ gen_temperature|default(0.8) }}">
+                                <div class="temperature-labels">
+                                    <span>常规</span>
+                                    <span>平衡</span>
+                                    <span>创新</span>
+                                </div>
+                            </div>
+                            <div class="temperature-display">
+                                当前值: <span id="gen-temperature-value">{{ gen_temperature|default(0.8) }}</span>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-success" id="submit-generate">生成问题集</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- 模型设置弹窗 -->
     <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
         <div class="modal-dialog">
@@ -349,6 +355,11 @@
         
         genTemperatureSlider.addEventListener('input', function() {
             genTemperatureValue.textContent = this.value;
+        });
+
+        // 生成问题集表单提交
+        document.getElementById('submit-generate').addEventListener('click', function() {
+            document.getElementById('generate-questions-form').submit();
         });
 
         // 模型提供商切换
