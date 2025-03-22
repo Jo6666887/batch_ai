@@ -78,7 +78,7 @@ pip install -r requirements.txt
 
 ### 配置API密钥
 
-创建`.env`文件并设置API密钥:
+创建`.env`文件并设置API密钥（这里可以设置，也可以不设置，因为可以去首页界面设置，作者默认设置了火山引擎）:
 
 ```
 ARK_API_KEY="您的API密钥"
