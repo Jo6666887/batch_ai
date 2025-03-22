@@ -15,6 +15,7 @@ import httpx
 import asyncio
 from functools import partial
 import re
+import html
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,41 @@ def timestamp_to_time(timestamp):
     """将时间戳转换为可读时间格式"""
     from datetime import datetime
     return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+def clean_question(text):
+    """清洗输入文本，移除HTML标签、多余空格和不必要的字符"""
+    if pd.isna(text) or text is None:
+        return ""
+    
+    # 确保是字符串类型
+    text = str(text).strip()
+    
+    # 解码HTML实体
+    text = html.unescape(text)
+    
+    # 移除HTML标签
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # 移除多余空格和制表符
+    text = re.sub(r'\s+', ' ', text)
+    
+    # 移除控制字符
+    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    
+    # 移除特殊Unicode字符和零宽字符
+    text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
+    
+    # 移除重复的标点符号
+    text = re.sub(r'([.。!！?？;；,，:：、])\1+', r'\1', text)
+    
+    # 修正常见的排版错误
+    text = re.sub(r'([。！？])([^"\'])', r'\1 \2', text)  # 在句号后添加空格（除非跟着引号）
+    
+    # 替换连续多个换行为单个换行
+    text = re.sub(r'\n+', '\n', text)
+    
+    # 最终修剪
+    return text.strip()
 
 def process_questions(task_id, questions, system_prompt, api_key, temperature, model_provider="volcano", base_url=None, model_name=None):
     """后台处理问题的函数"""
@@ -154,8 +190,23 @@ def process_questions(task_id, questions, system_prompt, api_key, temperature, m
                 batch_results.append(None)
                 continue
             
-            # 确保问题是字符串类型
-            question = str(question).strip()
+            # 数据清洗 - 清理输入问题
+            original_question = str(question).strip()
+            question = clean_question(original_question)
+            
+            # 如果清洗后为空，则跳过
+            if not question:
+                logger.warning(f"清洗后问题为空，跳过问题: 索引 {i}")
+                batch_results.append(None)
+                continue
+                
+            # 记录清洗前后的变化（如果有显著变化）
+            if question != original_question and len(original_question) > 0:
+                char_diff_percent = 1 - (len(question) / len(original_question))
+                if char_diff_percent > 0.1:  # 如果字符减少超过10%
+                    logger.info(f"问题 {i+1} 数据清洗前后变化较大: {char_diff_percent:.1%}")
+                    logger.info(f"清洗前: {original_question[:50]}{'...' if len(original_question) > 50 else ''}")
+                    logger.info(f"清洗后: {question[:50]}{'...' if len(question) > 50 else ''}")
             
             # 选择客户端（轮询方式）
             client_idx = i % len(clients)
@@ -530,8 +581,10 @@ def upload_file():
                 # 获取所有非空问题
                 for i, value in enumerate(df.iloc[:, 0]):
                     if pd.notna(value) and str(value).strip():
-                        questions.append(str(value).strip())
-                        logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
+                        cleaned_question = clean_question(str(value))
+                        if cleaned_question:  # 只添加清洗后非空的问题
+                            questions.append(cleaned_question)
+                            logger.info(f"添加问题{i+1}: {cleaned_question[:30]}...")
             
             elif filename.endswith('.csv'):
                 # 处理CSV文件
@@ -541,8 +594,10 @@ def upload_file():
                 # 获取所有非空问题
                 for i, value in enumerate(df.iloc[:, 0]):
                     if pd.notna(value) and str(value).strip():
-                        questions.append(str(value).strip())
-                        logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
+                        cleaned_question = clean_question(str(value))
+                        if cleaned_question:  # 只添加清洗后非空的问题
+                            questions.append(cleaned_question)
+                            logger.info(f"添加问题{i+1}: {cleaned_question[:30]}...")
             
             elif filename.endswith(('.json', '.jsonl')):
                 # 处理JSON文件（从生成问题保存的）
@@ -552,20 +607,35 @@ def upload_file():
                         questions = []
                         for line in f:
                             item = json.loads(line.strip())
+                            raw_question = ""
                             if isinstance(item, str):
-                                questions.append(item)
+                                raw_question = item
                             elif isinstance(item, dict) and 'question' in item:
-                                questions.append(item['question'])
+                                raw_question = item['question']
+                            
+                            if raw_question:
+                                cleaned_question = clean_question(raw_question)
+                                if cleaned_question:  # 只添加清洗后非空的问题
+                                    questions.append(cleaned_question)
                     else:
                         # 处理JSON格式
                         data = json.load(f)
                         if isinstance(data, list):
                             if all(isinstance(item, str) for item in data):
                                 # 直接使用字符串列表
-                                questions = data
+                                questions = []
+                                for item in data:
+                                    cleaned_question = clean_question(item)
+                                    if cleaned_question:  # 只添加清洗后非空的问题
+                                        questions.append(cleaned_question)
                             elif all(isinstance(item, dict) for item in data) and 'question' in data[0]:
                                 # 使用对象列表，提取question字段
-                                questions = [item['question'] for item in data if 'question' in item]
+                                questions = []
+                                for item in data:
+                                    if 'question' in item:
+                                        cleaned_question = clean_question(item['question'])
+                                        if cleaned_question:  # 只添加清洗后非空的问题
+                                            questions.append(cleaned_question)
                 
                 logger.info(f"从JSON文件加载了{len(questions)}个问题")
             
