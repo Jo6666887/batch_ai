@@ -1311,70 +1311,83 @@ def delete_task(task_id):
 
 @app.route('/api/optimize_prompt', methods=['POST'])
 def optimize_prompt():
-    """使用当前配置的大模型优化提示词"""
     try:
-        data = request.get_json()
-        original_prompt = data.get('prompt', '')
+        # 从请求中获取提示词
+        data = request.json
+        if not data or 'prompt' not in data:
+            return jsonify({"error": "提示词不能为空"}), 400
         
-        if not original_prompt.strip():
-            return jsonify({"status": "error", "message": "提示词不能为空"}), 400
+        prompt = data['prompt']
+        if not prompt.strip():
+            return jsonify({"error": "提示词不能为空"}), 400
         
-        # 获取当前配置的模型信息
+        # 获取模型提供商参数
         model_provider = request.args.get('model_provider', 'volcano')
-        api_key = os.environ.get("ARK_API_KEY")  # 使用系统默认的API密钥
         
-        # 根据模型提供商选择不同实现
+        # 获取API密钥
+        api_key = os.environ.get(f"{model_provider.upper()}_API_KEY", os.environ.get("ARK_API_KEY"))
+        if not api_key:
+            logger.error(f"未找到{model_provider}的API密钥")
+            return jsonify({"error": f"未找到{model_provider}的API密钥"}), 500
+        
+        # 根据模型提供商执行不同的操作
+        optimized_prompt = ""
+        
         if model_provider == 'volcano':
-            base_url = 'https://ark.cn-beijing.volces.com/api/v3'
-            model_name = 'ep-20250317184554-g5985'
+            # 使用火山引擎API优化提示词
+            base_url = "https://ark.cn-beijing.volces.com/api/v3"
+            model_name = "ep-20250317184554-g5985"
             
             client = Ark(
                 base_url=base_url,
                 api_key=api_key
             )
-            
-            # 调用模型优化提示词
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": "你是一位专业的提示词专家，优化用户提供的提示词，确保大模型能更好的理解和回答。保持专业、简洁、精确。不要回答其他的内容。"},
-                    {"role": "user", "content": f"请优化以下提示词，使其更加清晰、专业、有效:\n\n{original_prompt}，不要添加任何其他内容。"}
+                    {"role": "system", "content": "你是一位专业的提示词优化专家，擅长优化AI提示词以获得更好的效果。请优化用户提供的提示词，使其更加清晰、专业和有效。仅返回优化后的提示词，不要包含任何解释、前缀或后缀。"},
+                    {"role": "user", "content": f"请优化以下提示词，使其更加清晰专业：\n\n{prompt}"}
                 ],
-                temperature=0.5
+                temperature=0.7,
+                max_tokens=2048
             )
-            
-            optimized_prompt = response.choices[0].message.content
-        else:
-            # OpenAI实现
-            base_url = 'https://api.openai.com/v1'
-            model_name = 'gpt-4o'
+            optimized_prompt = response.choices[0].message.content.strip()
+        
+        elif model_provider == 'openai':
+            # 使用OpenAI API优化提示词
+            base_url = "https://api.openai.com/v1"
+            model_name = "gpt-3.5-turbo"
             
             client = openai.OpenAI(
                 api_key=api_key,
                 base_url=base_url
             )
-            
-            # 调用模型优化提示词
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": "你是一位专业的提示词专家，优化用户提供的提示词，确保大模型能更好的理解和回答。保持专业、简洁、精确。不要添加不必要的内容。"},
-                    {"role": "user", "content": f"请优化以下提示词，使其更加清晰、专业、有效:\n\n{original_prompt}"}
+                    {"role": "system", "content": "你是一位专业的提示词优化专家，擅长优化AI提示词以获得更好的效果。请优化用户提供的提示词，使其更加清晰、专业和有效。仅返回优化后的提示词，不要包含任何解释、前缀或后缀。"},
+                    {"role": "user", "content": f"请优化以下提示词，使其更加清晰专业：\n\n{prompt}"}
                 ],
-                temperature=0.5
+                temperature=0.7,
+                max_tokens=2048
             )
-            
-            optimized_prompt = response.choices[0].message.content
+            optimized_prompt = response.choices[0].message.content.strip()
         
-        logger.info(f"提示词优化成功: '{original_prompt}' -> '{optimized_prompt}'")
+        else:
+            return jsonify({"error": f"不支持的模型提供商: {model_provider}"}), 400
+        
+        # 记录优化成功
+        logger.info(f"成功优化提示词")
+        
+        # 返回优化后的提示词
         return jsonify({
-            "status": "success", 
-            "original_prompt": original_prompt,
+            "original_prompt": prompt,
             "optimized_prompt": optimized_prompt
         })
+    
     except Exception as e:
-        logger.error(f"优化提示词出错: {str(e)}")
-        return jsonify({"status": "error", "message": f"优化失败: {str(e)}"}), 500
+        logger.error(f"优化提示词时出错: {str(e)}")
+        return jsonify({"error": f"优化提示词失败: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
