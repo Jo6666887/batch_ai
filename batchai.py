@@ -503,6 +503,17 @@ def upload_file():
                         questions.append(str(value).strip())
                         logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
             
+            elif filename.endswith('.csv'):
+                # 处理CSV文件
+                df = pd.read_csv(filepath, encoding='utf-8')
+                logger.info(f"CSV文件形状: {df.shape}")
+                
+                # 获取所有非空问题
+                for i, value in enumerate(df.iloc[:, 0]):
+                    if pd.notna(value) and str(value).strip():
+                        questions.append(str(value).strip())
+                        logger.info(f"添加问题{i+1}: {str(value).strip()[:30]}...")
+            
             elif filename.endswith(('.json', '.jsonl')):
                 # 处理JSON文件（从生成问题保存的）
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -530,7 +541,7 @@ def upload_file():
             
             else:
                 logger.error(f"不支持的文件类型: {filename}")
-                return "不支持的文件类型，请上传Excel或JSON文件", 400
+                return "不支持的文件类型，请上传Excel、CSV或JSON文件", 400
             
             logger.info(f"共找到 {len(questions)} 个有效问题")
             
