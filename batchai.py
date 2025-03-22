@@ -47,6 +47,13 @@ async_client = httpx.AsyncClient(
     http2=True  # 已安装h2依赖，启用HTTP/2以提高性能
 )
 
+# 添加自定义过滤器
+@app.template_filter('timestamp_to_time')
+def timestamp_to_time(timestamp):
+    """将时间戳转换为可读时间格式"""
+    from datetime import datetime
+    return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
 def process_questions(task_id, questions, system_prompt, api_key, temperature, model_provider="volcano", base_url=None, model_name=None):
     """后台处理问题的函数"""
     logger.info(f"开始处理任务 {task_id}，使用温度参数: {temperature}，模型提供商: {model_provider}")
@@ -430,6 +437,27 @@ def save_results(task_id, results):
 def index():
     # 检查是否有保存的任务状态
     last_task_id = request.args.get('last_task_id')
+    
+    # 获取所有活动任务
+    active_tasks = []
+    for task_id, task in current_tasks.items():
+        if task.get('status') != 'completed' and task.get('status') != 'failed':
+            # 创建活动任务摘要
+            task_summary = {
+                'id': task_id,
+                'type': task.get('type', 'batch_qa'),
+                'status': task.get('status', 'unknown'),
+                'completed': task.get('completed', 0),
+                'total': task.get('total', 0),
+                'paused': task.get('paused', False),
+                'last_update': task.get('last_update', 0),
+                'filename': task.get('filename', f'任务 {task_id}')
+            }
+            active_tasks.append(task_summary)
+    
+    # 按最后更新时间排序
+    active_tasks.sort(key=lambda x: x['last_update'], reverse=True)
+    
     if last_task_id and last_task_id in current_tasks:
         task = current_tasks[last_task_id]
         system_prompt = task.get('system_prompt', '')
@@ -448,8 +476,10 @@ def index():
                               volcano_base_url=volcano_base_url,
                               volcano_model=volcano_model,
                               openai_base_url=openai_base_url,
-                              openai_model=openai_model)
-    return render_template('index.html')
+                              openai_model=openai_model,
+                              active_tasks=active_tasks)
+    
+    return render_template('index.html', active_tasks=active_tasks)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -558,7 +588,10 @@ def upload_file():
                 'status': 'starting',
                 'total': len(questions),
                 'completed': 0,
-                'results': []
+                'results': [],
+                'creation_time': time.time(),  # 添加创建时间
+                'start_time': time.time(),    # 添加开始时间
+                'type': 'batch_qa'           # 添加任务类型
             }
             
             thread = threading.Thread(
@@ -606,7 +639,10 @@ def task_status(task_id):
                 'last_update': time.time(),
                 'interrupted': False,
                 'current_index': len(results),
-                'system_prompt': system_prompt
+                'system_prompt': system_prompt,
+                'creation_time': time.time(),  # 添加创建时间
+                'start_time': time.time(),    # 添加开始时间
+                'type': 'batch_qa'           # 添加任务类型
             }
             logger.info(f"从文件恢复任务 {task_id}，共 {len(results)} 个结果")
         else:
@@ -836,7 +872,9 @@ def generate_questions():
         'completed': 0,
         'results': [],
         'paused': False,
-        'last_update': time.time()
+        'last_update': time.time(),
+        'creation_time': time.time(),  # 添加创建时间
+        'start_time': time.time()     # 添加开始时间
     }
     
     # 启动后台处理线程
@@ -884,7 +922,9 @@ def generation_status(task_id):
                 'last_update': time.time(),
                 'gen_system_prompt': gen_system_prompt,
                 'gen_temperature': gen_temperature,
-                'generation_prompt': generation_prompt
+                'generation_prompt': generation_prompt,
+                'creation_time': time.time(),  # 添加创建时间
+                'start_time': time.time()     # 添加开始时间
             }
             logger.info(f"从文件恢复生成任务 {task_id}，共 {len(results)} 个结果")
         else:
@@ -1173,6 +1213,49 @@ def save_generation_results(task_id, results):
                 json.dump(metadata, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存生成任务元数据出错: {str(e)}")
+
+@app.route('/tasks')
+def list_tasks():
+    """显示所有当前任务的列表页面"""
+    # 创建一个任务摘要列表以供前端显示
+    task_summaries = []
+    for task_id, task in current_tasks.items():
+        task_type = task.get('type', '问题处理')
+        status = task.get('status', 'unknown')
+        completed = task.get('completed', 0)
+        total = task.get('total', 0)
+        paused = task.get('paused', False)
+        last_update = task.get('last_update', 0)
+        
+        # 计算进度百分比
+        progress = 0
+        if total > 0:
+            progress = (completed / total) * 100
+        
+        # 计算任务运行时间
+        current_time = time.time()
+        time_elapsed = current_time - task.get('start_time', current_time)
+        
+        # 创建任务摘要
+        summary = {
+            'id': task_id,
+            'type': task_type,
+            'status': status,
+            'completed': completed,
+            'total': total, 
+            'progress': progress,
+            'paused': paused,
+            'last_update': last_update,
+            'time_elapsed': time_elapsed,
+            'filename': task.get('filename', ''),
+            'creation_time': task.get('creation_time', current_time)
+        }
+        task_summaries.append(summary)
+    
+    # 按最后更新时间排序，最新的排在前面
+    task_summaries.sort(key=lambda x: x['last_update'], reverse=True)
+    
+    return render_template('tasks.html', tasks=task_summaries)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)

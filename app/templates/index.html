@@ -94,10 +94,15 @@
         <div class="site-header">
             <h1 class="text-4xl font-bold">BATCH-AI @ZJW</h1>
             
-            <!-- 模型设置按钮移到右上角 -->
-            <button type="button" class="btn btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
-                <i class="bi bi-gear-fill"></i> 模型设置
-            </button>
+            <!-- 添加任务管理按钮和模型设置按钮 -->
+            <div class="position-absolute top-0 end-0">
+                <a href="/tasks" class="btn btn-light me-2">
+                    <i class="bi bi-list-check"></i> 任务管理
+                </a>
+                <button type="button" class="btn btn-light settings-btn" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                    <i class="bi bi-gear-fill"></i> 模型设置
+                </button>
+            </div>
         </div>
         
         <div class="row">
@@ -162,6 +167,48 @@
                     {% if last_task_id %}
                     <div class="last-task-info">
                         <p><strong>您有一个暂停的任务！</strong> 您可以<a href="/task/{{ last_task_id }}">返回该任务</a>继续处理，或开始新任务。</p>
+                    </div>
+                    {% endif %}
+                    
+                    {% if active_tasks %}
+                    <div class="last-task-info" style="background-color: #f5fff0; border-left-color: #28a745;">
+                        <p><strong>您有 {{ active_tasks|length }} 个正在运行的任务：</strong></p>
+                        <div style="max-height: 150px; overflow-y: auto; margin-bottom: 10px;">
+                            {% for task in active_tasks %}
+                            <div style="margin-bottom: 5px; padding: 5px; border-radius: 4px; background-color: {% if task.paused %}#fff8e1{% else %}#e3f2fd{% endif %};">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        {% if task.type == 'question_generation' %}
+                                        <span class="badge bg-info me-2">问题生成</span>
+                                        {% else %}
+                                        <span class="badge bg-primary me-2">批量回答</span>
+                                        {% endif %}
+                                        {{ task.filename }}
+                                    </div>
+                                    <div>
+                                        {% if task.paused %}
+                                        <span class="badge bg-warning">已暂停</span>
+                                        {% else %}
+                                        <span class="badge bg-success">运行中</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="progress mt-1" style="height: 5px;">
+                                    <div class="progress-bar {% if task.paused %}bg-warning{% else %}bg-primary{% endif %}" 
+                                         role="progressbar" 
+                                         style="width: {{ (task.completed / task.total * 100) if task.total > 0 else 0 }}%" 
+                                         aria-valuenow="{{ task.completed }}" aria-valuemin="0" aria-valuemax="{{ task.total }}"></div>
+                                </div>
+                                <div class="d-flex justify-content-between mt-1">
+                                    <small>进度: {{ task.completed }}/{{ task.total }}</small>
+                                    <a href="{% if task.type == 'question_generation' %}/generation/{{ task.id }}{% else %}/task/{{ task.id }}{% endif %}" class="btn btn-sm btn-outline-primary">查看详情</a>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <div class="text-center">
+                            <a href="/tasks" class="btn btn-sm btn-outline-success">查看所有任务</a>
+                        </div>
                     </div>
                     {% endif %}
                     

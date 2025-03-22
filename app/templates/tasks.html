@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务管理 - BATCH-AI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background: linear-gradient(135deg, #0093E9 0%, #00C06B 100%);
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        .tasks-container {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+            margin-bottom: 2rem;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .site-header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: white;
+            position: relative;
+        }
+        .task-card {
+            margin-bottom: 1rem;
+            border-left: 4px solid #007bff;
+            border-radius: 4px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            transition: all 0.3s ease;
+        }
+        .task-card:hover {
+            box-shadow: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.15);
+            transform: translateY(-2px);
+        }
+        .task-card.paused {
+            border-left-color: #ffc107;
+        }
+        .task-card.completed {
+            border-left-color: #28a745;
+        }
+        .task-card.failed {
+            border-left-color: #dc3545;
+        }
+        .task-card.processing {
+            border-left-color: #17a2b8;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #6c757d;
+        }
+        .task-actions {
+            margin-top: 5px;
+        }
+        .task-progress-bar {
+            height: 8px;
+            margin-top: 10px;
+        }
+        .task-meta {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 网站标题 -->
+        <div class="site-header">
+            <h1 class="text-4xl font-bold">BATCH-AI @ZJW</h1>
+        </div>
+        
+        <div class="tasks-container">
+            <div class="header">
+                <h2 class="text-xl font-bold text-gray-800">任务管理</h2>
+                <p class="lead text-gray-600 mt-2">查看并管理所有正在运行和已完成的任务</p>
+                <div class="mt-3">
+                    <a href="/" class="btn btn-outline-primary me-2">返回首页</a>
+                    <a href="javascript:location.reload();" class="btn btn-outline-secondary">刷新任务状态</a>
+                </div>
+            </div>
+            
+            <div id="tasks-list">
+                {% if tasks %}
+                    <!-- 显示任务列表 -->
+                    {% for task in tasks %}
+                        <div class="task-card {% if task.paused %}paused{% elif task.status == 'completed' %}completed{% elif task.status == 'failed' %}failed{% elif task.status == 'processing' %}processing{% endif %}">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h5>
+                                        {% if task.type == 'question_generation' %}
+                                            <span class="badge bg-info me-2">问题生成</span>
+                                        {% else %}
+                                            <span class="badge bg-primary me-2">批量回答</span>
+                                        {% endif %}
+                                        {{ task.filename or '任务 ' + task.id }}
+                                    </h5>
+                                </div>
+                                <div>
+                                    {% if task.paused %}
+                                        <span class="badge bg-warning">已暂停</span>
+                                    {% elif task.status == 'completed' %}
+                                        <span class="badge bg-success">已完成</span>
+                                    {% elif task.status == 'failed' %}
+                                        <span class="badge bg-danger">失败</span>
+                                    {% elif task.status == 'processing' %}
+                                        <span class="badge bg-info">处理中</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ task.status }}</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div class="task-meta">
+                                <span>进度: {{ task.completed }}/{{ task.total }}</span>
+                                {% if task.last_update %}
+                                    <span class="ms-3">最后更新: {{ (task.last_update|int)|timestamp_to_time }}</span>
+                                {% endif %}
+                                {% if task.creation_time %}
+                                    <span class="ms-3">创建时间: {{ (task.creation_time|int)|timestamp_to_time }}</span>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="progress task-progress-bar">
+                                <div class="progress-bar {% if task.paused %}bg-warning{% elif task.status == 'completed' %}bg-success{% elif task.status == 'failed' %}bg-danger{% endif %}" 
+                                     role="progressbar" 
+                                     style="width: {{ task.progress }}%" 
+                                     aria-valuenow="{{ task.progress }}" 
+                                     aria-valuemin="0" 
+                                     aria-valuemax="100"></div>
+                            </div>
+                            
+                            <div class="task-actions">
+                                <!-- 任务操作按钮 -->
+                                {% if task.type == 'question_generation' %}
+                                    <a href="/generation/{{ task.id }}" class="btn btn-sm btn-primary">查看详情</a>
+                                {% else %}
+                                    <a href="/task/{{ task.id }}" class="btn btn-sm btn-primary">查看详情</a>
+                                {% endif %}
+                                
+                                {% if task.status == 'completed' %}
+                                    {% if task.type == 'question_generation' %}
+                                        <a href="/download/generation/{{ task.id }}" class="btn btn-sm btn-success">下载结果</a>
+                                    {% else %}
+                                        <a href="/download/{{ task.id }}" class="btn btn-sm btn-success">下载结果</a>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <!-- 空状态 -->
+                    <div class="empty-state">
+                        <p>当前没有任务</p>
+                        <a href="/" class="btn btn-primary mt-3">创建新任务</a>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 自动刷新页面
+        setTimeout(function() {
+            location.reload();
+        }, 30000); // 每30秒刷新一次
+    </script>
+</body>
+</html> 
